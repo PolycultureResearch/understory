@@ -1,0 +1,34 @@
+name: white_cube
+display_name: "White Cube"
+vertical: b2c_saas
+
+warehouse:
+  type: duckdb
+  path: "${FAKE_COMPANIES_DIR:-/Users/devon/Documents/code/fake_companies}/out/white_cube.duckdb"
+  read_only: true
+
+semantic_layer:
+  type: metricflow_local
+  dbt_project_dir: "${FAKE_COMPANIES_DIR:-/Users/devon/Documents/code/fake_companies}/dbt/b2c_saas"
+  mf_bin: mf
+  env:
+    FAKE_DB: "${FAKE_COMPANIES_DIR:-/Users/devon/Documents/code/fake_companies}/out/white_cube.duckdb"
+
+limits:
+  row_cap: 200
+  timeout_s: 60
+  max_clarifications: 3
+
+sql:
+  enabled: true
+  schemas: [main_marts]
+
+log:
+  events_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/white_cube/events"
+  text_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/white_cube/text"
+  text_retention_days: 90
+
+instructions: >
+  Understory exposes White Cube's governed metrics. Call get_context first, then
+  query_metrics with a spec. Present clarification options verbatim. Include every
+  required_disclosure in your answer. Call log_answer with your draft before replying.
