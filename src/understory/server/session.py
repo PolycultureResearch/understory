@@ -121,16 +121,26 @@ class SessionStore:
 
 
 _ISO_DATE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2})?(?:T[\d:]+)?\b")
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+# "Mar 31", "March 31, 2025", "31 March 2025", "1st of June". The day number
+# next to a month name is a date, not a figure that needs a source.
+_PROSE_DATE = re.compile(
+    rf"\b(?:{_MONTH}\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?"
+    rf"|\d{{1,2}}(?:st|nd|rd|th)?(?:\s+of)?\s+{_MONTH}(?:,?\s+\d{{4}})?)\b",
+    re.IGNORECASE,
+)
 
 
 def extract_numbers(text: str) -> list[tuple[str, float]]:
     """Every number in the draft as (literal, value). Percent stays as the shown value.
 
-    ISO dates are removed first so "2025-03-31" does not yield 31 as a number
-    that needs a source. Answers quote windows as dates all the time.
+    Dates are removed first so "2025-03-31" and "Mar 31, 2025" do not yield 31
+    as a number that needs a source. Answers quote windows as dates all the
+    time, and in the first live eval the false positive leaked into replies.
     """
     out: list[tuple[str, float]] = []
     text = _ISO_DATE.sub(" ", text)
+    text = _PROSE_DATE.sub(" ", text)
     for m in _NUMBER.finditer(text):
         literal = m.group(0).strip()
         int_part = m.group(1).replace(",", "")

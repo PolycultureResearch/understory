@@ -40,6 +40,16 @@ An LLM pass inside `log_answer`, through OpenRouter, that checks the draft for c
 
 Whichever of Claude.ai or ChatGPT Enterprise the first client does not use. The tool contracts do not change. What changes is connector auth, instruction placement, and the eval capture rate, which we report per platform.
 
+### 1.7 Token cost
+
+The first live eval cost about 6 cents per question on Claude Sonnet 5, with 80% of it in input tokens and most of that a fixed prefix (system prompt, tool schemas, the get_context result) re-sent on every request without caching. `knowledge/token-use-2026-09-11.md` has the measurements. Prompt caching, conversation continuation on clarification, usage capture, and budget guards are being done now on the `harness-cost` branch. What remains:
+
+- Run routine evals on a cheaper model (Haiku 4.5 or GPT-5 mini) and Sonnet weekly. The harness score is a floor for the client's chatbot either way.
+- Trim payloads the chatbot re-reads on every turn. Drop the full dimension list from `get_context` (it pushed the document from the 3 to 6 KB target to 7.6 KB, and `describe_metric` carries it). Return compiled SQL only on request; it is half of every governed result. Lower the chat row cap; a 200-row result is about 3,300 tokens that ride along for the rest of the conversation.
+- Stop the redundant `list_metrics` call. In 11 of 47 items the model called it right after `get_context`, which already lists every metric. Say so in the tool description.
+
+These matter more in production than in evals: the client's chatbot pays those tokens, and their employees feel the latency.
+
 ## Phase 2: own the conversation where it helps
 
 ### 2.1 Slack bot
