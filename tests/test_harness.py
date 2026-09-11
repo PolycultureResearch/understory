@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -26,10 +29,19 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.usage import RunUsage
 
-from understory.harness.agent import DEFAULT_MODEL, Turn, run_question
+from understory.harness import evals
+from understory.harness.agent import DEFAULT_MODEL, Turn, _usage, run_question
 from understory.harness.deterministic import run_deterministic
-from understory.harness.evals import EvalReport, numbers_missing, run_evals, write_report
+from understory.harness.evals import (
+    EvalReport,
+    ItemScore,
+    numbers_missing,
+    run_evals,
+    strip_narration,
+    write_report,
+)
 from understory.harness.golden import load_golden
 from understory.server.service import Service
 from understory.telemetry import TelemetryWriter
@@ -207,24 +219,65 @@ def test_run_question_reports_a_model_failure(alpenglow_db):
     assert turn.answer == ""
 
 
-def _scripted_clarification(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-    """The clarification round trip: ask on the first run, resolve on the second."""
-    prompt = next(
-        part.content
+class _Clarification:
+    """The clarification round trip, as a FunctionModel that remembers what it saw.
+
+    The second turn continues the first turn's conversation, so this only reads
+    the tool results of the current turn, the ones after the last user message.
+    Everything before that is history, and `seen` keeps it so a test can check
+    the second turn really was handed the first turn's messages.
+    """
+
+    def __init__(self) -> None:
+        self.seen: list[list[ModelMessage]] = []
+
+    def __call__(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        self.seen.append(list(messages))
+        return _scripted_clarification(messages, info)
+
+
+def _turn_messages(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """The messages of the current turn: the last user message and everything after."""
+    last_user = 0
+    for index, m in enumerate(messages):
+        if isinstance(m, ModelRequest) and any(isinstance(p, UserPromptPart) for p in m.parts):
+            last_user = index
+    return messages[last_user:]
+
+
+def _prompts(messages: list[ModelMessage]) -> list[str]:
+    return [
+        str(part.content)
         for m in messages
         if isinstance(m, ModelRequest)
         for part in m.parts
         if isinstance(part, UserPromptPart)
-    )
-    answered = "collision:revenue = net_revenue" in str(prompt)
-    returned = {
+    ]
+
+
+def _returned(messages: list[ModelMessage]) -> dict[str, Any]:
+    return {
         part.tool_name: part.content
         for m in messages
         if isinstance(m, ModelRequest)
         for part in m.parts
         if isinstance(part, ToolReturnPart)
     }
-    if "get_context" not in returned:
+
+
+def _scripted_clarification(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """The clarification round trip: ask on the first turn, resolve on the second.
+
+    get_context is checked against the whole history, the way a model with the
+    context already in its window behaves, so a second turn that was handed the
+    first turn's messages never fetches it twice. query_metrics and log_answer
+    are checked against this turn only.
+    """
+    turn = _turn_messages(messages)
+    answered = any("collision:revenue = net_revenue" in p for p in _prompts(turn))
+    history = _returned(messages)
+    returned = _returned(turn)
+    if "get_context" not in history:
         return ModelResponse(parts=[ToolCallPart("get_context", {})])
     if "query_metrics" not in returned:
         spec: dict[str, Any] = {
@@ -258,9 +311,10 @@ def test_run_evals_scores_a_clarification_item(alpenglow_db):
     items = [i for i in load_golden(alpenglow_db.golden_path) if i.id == wanted]
     assert len(items) == 1
 
+    script = _Clarification()
     service = _service(alpenglow_db)
     try:
-        report = run_evals(service, items, model=FunctionModel(_scripted_clarification))
+        report = run_evals(service, items, model=FunctionModel(script))
     finally:
         service.close()
 
@@ -272,9 +326,247 @@ def test_run_evals_scores_a_clarification_item(alpenglow_db):
     assert score.capture is True and score.log_answer_status == "pass"
     assert report.summary()["resolution_rate"] == 1.0
 
+    # The second turn continued the first turn's conversation. The request that
+    # opens it carries both user messages and the first turn's tool results, and
+    # the trace for that turn records the clarified query without a second
+    # get_context.
+    first_turn_requests = [m for m in script.seen if len(_prompts(m)) == 1]
+    second_turn_requests = [m for m in script.seen if len(_prompts(m)) == 2]
+    assert first_turn_requests, "the first turn never ran"
+    assert second_turn_requests, "the second turn started a fresh conversation"
+
+    opening = second_turn_requests[0]
+    assert _prompts(opening)[0] == items[0].question
+    assert _prompts(opening)[1].startswith("My answers: collision:revenue = net_revenue")
+    assert "get_context" in _returned(opening), "the first turn's context was dropped"
+    assert len(opening) > len(first_turn_requests[-1]), "no history was carried over"
+    assert score.tool_calls == ["query_metrics", "log_answer"]
+    assert "get_context" not in score.tool_calls
+
 
 # --------------------------------------------------------------------------- #
-# 4. Live: two alpenglow items through OpenRouter.
+# 4. Usage and cost capture.
+# --------------------------------------------------------------------------- #
+
+
+class _FakeResult:
+    """The shape `_usage` reads: a `usage` property and `new_messages()`."""
+
+    def __init__(self, usage: RunUsage, responses: list[Any] | None = None) -> None:
+        self.usage = usage
+        self._responses = responses or []
+
+    def new_messages(self) -> list[Any]:
+        return self._responses
+
+
+def _run_usage() -> RunUsage:
+    return RunUsage(
+        input_tokens=4100,
+        output_tokens=260,
+        cache_read_tokens=3800,
+        cache_write_tokens=1900,
+        requests=4,
+        tool_calls=3,
+    )
+
+
+def test_usage_reads_every_counter():
+    usage = _usage(_FakeResult(_run_usage()))
+    assert usage == {
+        "input_tokens": 4100,
+        "output_tokens": 260,
+        "cache_read_tokens": 3800,
+        "cache_write_tokens": 1900,
+        "requests": 4,
+        "tool_calls": 3,
+        "total_tokens": 4360,
+    }
+
+
+def test_usage_prefers_the_cost_openrouter_reported():
+    """Cost comes off provider_details, summed over the responses this run added."""
+    priced = _run_usage()
+    priced.cost = Decimal("0.99")  # the genai-prices estimate, the fallback only
+    responses = [
+        ModelResponse(parts=[], provider_name="openrouter", provider_details={"cost": 0.0021}),
+        ModelResponse(parts=[], provider_name="openrouter", provider_details={"cost": 0.0009}),
+        ModelRequest(parts=[UserPromptPart("not a response")]),
+    ]
+    usage = _usage(_FakeResult(priced, responses))
+    assert usage["cost"] == pytest.approx(0.003)
+    assert usage["cache_read_tokens"] == 3800
+
+
+def test_usage_falls_back_to_the_price_estimate():
+    priced = _run_usage()
+    priced.cost = Decimal("0.0042")
+    assert _usage(_FakeResult(priced))["cost"] == pytest.approx(0.0042)
+
+
+def test_usage_survives_a_callable_usage():
+    """`usage` was a method before pydantic-ai 2.x. Reading it as one must still work."""
+
+    class _Old:
+        def usage(self) -> RunUsage:
+            return _run_usage()
+
+        def new_messages(self) -> list[Any]:
+            return []
+
+    assert _usage(_Old())["requests"] == 4
+
+
+def test_usage_of_nothing_is_empty():
+    assert _usage(object()) == {}
+
+
+def test_report_summarises_usage_and_cost():
+    items = [
+        ItemScore(
+            id="a",
+            question="?",
+            passed=True,
+            usage={
+                "input_tokens": 4000,
+                "output_tokens": 200,
+                "cache_read_tokens": 3600,
+                "cache_write_tokens": 400,
+                "total_tokens": 4200,
+                "requests": 4,
+                "cost": 0.004,
+            },
+        ),
+        ItemScore(
+            id="b",
+            question="?",
+            passed=True,
+            usage={
+                "input_tokens": 2000,
+                "output_tokens": 100,
+                "cache_read_tokens": 1800,
+                "cache_write_tokens": 0,
+                "total_tokens": 2100,
+                "requests": 3,
+                "cost": 0.002,
+            },
+        ),
+        ItemScore(id="c", question="?", skipped=True, observed_status="skipped"),
+    ]
+    now = datetime.now(UTC)
+    report = EvalReport(
+        tenant="alpenglow",
+        mode="agent",
+        model="anthropic/claude-haiku-4.5",
+        started_at=now,
+        finished_at=now,
+        items=items,
+    )
+    s = report.summary()
+    assert s["input_tokens"] == 6000
+    assert s["cache_read_tokens"] == 5400
+    assert s["measured_items"] == 2, "a skipped item is not in the average"
+    assert s["avg_input_tokens"] == 3000.0
+    assert s["avg_cache_read_tokens"] == 2700.0
+    assert s["cost_usd"] == pytest.approx(0.006)
+    assert s["avg_cost_usd"] == pytest.approx(0.003)
+    assert s["skipped"] == ["c"]
+
+    table = report.markdown()
+    assert "cache read 5,400" in table
+    assert "0.60c over 2 items, 0.30c each" in table
+    assert "| cents |" in table
+    assert "| 0.40c |" in table
+
+
+# --------------------------------------------------------------------------- #
+# 5. Budget guards: refuse a set the balance cannot cover, stop on a 402.
+# --------------------------------------------------------------------------- #
+
+
+def test_check_budget_refuses_when_the_credit_runs_short(monkeypatch):
+    monkeypatch.setattr(
+        evals, "key_status", lambda *a, **k: {"usage": 5.49, "limit": 6.0, "limit_remaining": 0.31}
+    )
+    lines: list[str] = []
+    with pytest.raises(evals.BudgetError) as raised:
+        evals.check_budget(10, per_item=0.06, echo=lines.append)
+    assert "$0.31 of credit left" in str(raised.value)
+    assert "--force" in str(raised.value)
+    assert lines and "remaining $0.31" in lines[0] and "needs $0.60" in lines[0]
+
+
+def test_check_budget_lets_a_covered_set_through(monkeypatch):
+    monkeypatch.setattr(
+        evals, "key_status", lambda *a, **k: {"usage": 1.0, "limit": 20.0, "limit_remaining": 19.0}
+    )
+    assert evals.check_budget(10, per_item=0.06)["limit_remaining"] == 19.0
+
+
+def test_check_budget_force_overrides_a_short_balance(monkeypatch):
+    monkeypatch.setattr(evals, "key_status", lambda *a, **k: {"limit_remaining": 0.01})
+    lines: list[str] = []
+    evals.check_budget(10, per_item=0.06, force=True, echo=lines.append)
+    assert any("--force" in line for line in lines)
+
+
+def test_check_budget_allows_an_unlimited_or_unreadable_key(monkeypatch):
+    monkeypatch.setattr(
+        evals, "key_status", lambda *a, **k: {"limit": None, "limit_remaining": None}
+    )
+    assert evals.check_budget(100) == {"limit": None, "limit_remaining": None}
+    monkeypatch.setattr(evals, "key_status", lambda *a, **k: {})
+    lines: list[str] = []
+    assert evals.check_budget(100, echo=lines.append) == {}
+    assert "balance unknown" in lines[0]
+
+
+def test_key_status_without_a_key_is_empty(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert evals.key_status() == {}
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_run_evals_stops_on_insufficient_credits(alpenglow_db):
+    """A 402 ends the run. Every item after it is skipped, not retried."""
+    items = load_golden(alpenglow_db.golden_path)[:3]
+    assert len(items) == 3
+    first = items[0].question
+
+    def broke(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if any(p == first for p in _prompts(messages)):
+            return ModelResponse(parts=[TextPart("The governed data cannot answer that.")])
+        raise ModelHTTPError(
+            status_code=402,
+            model_name="anthropic/claude-haiku-4.5",
+            body={"error": {"message": "Insufficient credits", "code": 402}},
+        )
+
+    lines: list[str] = []
+    service = _service(alpenglow_db)
+    try:
+        report = run_evals(service, items, model=FunctionModel(broke), echo=lines.append)
+    finally:
+        service.close()
+
+    ran, failed, skipped = report.items
+    assert not ran.skipped and ran.error is None
+    assert failed.error_status == 402 and not failed.skipped
+    assert skipped.skipped is True
+    assert skipped.observed_status == "skipped"
+    assert skipped.reasons == [evals.STOPPED_REASON]
+    assert skipped.passed is False
+
+    summary = report.summary()
+    assert summary["stopped"] == evals.STOPPED_REASON
+    assert summary["skipped"] == [items[2].id]
+    assert evals.STOPPED_REASON in report.markdown()
+    assert lines, "nothing was reported as it went"
+
+
+# --------------------------------------------------------------------------- #
+# 6. Live: two alpenglow items through OpenRouter.
 # --------------------------------------------------------------------------- #
 
 
@@ -290,10 +582,12 @@ def test_live_openrouter(alpenglow_db):
     chosen = [i for i in items if i.id in wanted]
     assert len(chosen) == 2
 
+    model = os.environ.get("UNDERSTORY_EVAL_MODEL", DEFAULT_MODEL)
     service = _service(alpenglow_db)
     try:
-        model = os.environ.get("UNDERSTORY_EVAL_MODEL", DEFAULT_MODEL)
-        report = run_evals(service, chosen, model=model)
+        report = run_evals(service, chosen, model=model, echo=print)
+    except evals.BudgetError as e:
+        pytest.skip(f"not enough OpenRouter credit: {e}")
     finally:
         service.close()
 
@@ -304,3 +598,85 @@ def test_live_openrouter(alpenglow_db):
         assert item.tool_calls, f"{item.id} called no tools"
     assert summary["capture_rate"] is not None
     print(report.markdown())
+
+    # Usage and cost came back, and on an Anthropic model the second request of
+    # a run reads the prefix the first one wrote.
+    assert summary["input_tokens"] > 0
+    assert summary["output_tokens"] > 0
+    assert summary["requests"] >= 4, "two items, several requests each"
+    assert summary["cost_usd"] > 0, "OpenRouter reported no cost"
+    assert summary["avg_cost_usd"] < 0.25, f"{summary['avg_cost_usd']} per question is too dear"
+    if "anthropic" in model:
+        assert summary["cache_write_tokens"] > 0, "nothing was ever written to the cache"
+        assert summary["cache_read_tokens"] > 0, "the cached prefix was never read back"
+        assert summary["cache_read_tokens"] > summary["input_tokens"] * 0.3
+
+
+# --------------------------------------------------------------------------- #
+# The false pass from the first live run: an expected number that appears only
+# in the model's sentence about dropping it must not count, and the reply that
+# narrates the check is not clean.
+# --------------------------------------------------------------------------- #
+
+_LEAKED = (
+    "The 315 total wasn't in a tool result, so I'll drop that computed sum and report "
+    "the monthly figures instead. Trials started in Germany, Jan to Jun 2025, by month: "
+    "Jan 49, Feb 42, Mar 44, Apr 52, May 67, Jun 61. The window is anchored to the "
+    "latest available data, not today."
+)
+
+
+def test_strip_narration_removes_sentences_about_the_check():
+    kept, dropped = strip_narration(_LEAKED)
+    assert len(dropped) == 1 and "315" in dropped[0]
+    assert "315" not in kept and "Jan 49" in kept
+    kept, dropped = strip_narration("Orders were 16,016. That's all.")
+    assert dropped == [] and "16,016" in kept
+    assert strip_narration("") == ("", [])
+    _, dropped = strip_narration("That's just the 31 in Mar 31 being flagged, not a real issue.")
+    assert dropped
+
+
+def _narrating(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Runs the covered query, then replies with the leaked narration."""
+    returned = {
+        part.tool_name: part.content
+        for m in messages
+        if isinstance(m, ModelRequest)
+        for part in m.parts
+        if isinstance(part, ToolReturnPart)
+    }
+    if "get_context" not in returned:
+        return ModelResponse(parts=[ToolCallPart("get_context", {})])
+    if "query_metrics" not in returned:
+        return ModelResponse(parts=[ToolCallPart("query_metrics", {"spec": _SPEC})])
+    if "log_answer" not in returned:
+        return ModelResponse(parts=[ToolCallPart("log_answer", {"draft": _LEAKED})])
+    return ModelResponse(parts=[TextPart(_LEAKED)])
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_narrated_number_does_not_pass_and_reply_is_not_clean(alpenglow_db):
+    from understory.harness.golden import Expectation, GoldenItem
+
+    item = GoldenItem(
+        id="narrated",
+        question=_SPEC["question"],
+        spec=_SPEC,
+        expected=Expectation(status="resolved", metrics=["net_revenue"], numbers=[315]),
+    )
+    service = _service(alpenglow_db)
+    try:
+        report = run_evals(service, [item], model=FunctionModel(_narrating))
+    finally:
+        service.close()
+
+    score = report.items[0]
+    assert score.answer is False, score.reasons
+    assert score.clean is False
+    assert not score.passed
+    assert any("narrates" in r for r in score.reasons)
+    assert any("315" in r for r in score.reasons)
+    assert report.summary()["clean_rate"] == 0.0
+    assert "| cln |" in report.markdown()

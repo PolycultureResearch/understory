@@ -36,6 +36,13 @@ def test_extract_numbers():
     assert nums["2025"] == 2025
     dated = dict(extract_numbers("From 2025-03-01 to 2025-03-31, orders were 16,016."))
     assert list(dated) == ["16,016"]
+    prose = dict(
+        extract_numbers(
+            "Q1 2025 (Jan 1 – Mar 31, 2025) and 30 June 2026: bookings were $17,040,100."
+        )
+    )
+    assert "$17,040,100" in prose
+    assert not {"1", "31", "30"} & set(prose)
 
 
 def test_review_answer_traces_numbers():

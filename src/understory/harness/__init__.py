@@ -15,18 +15,29 @@ from understory.harness.agent import (
     run_question,
 )
 from understory.harness.deterministic import run_deterministic
-from understory.harness.evals import EvalReport, ItemScore, run_evals, write_report
+from understory.harness.evals import (
+    BudgetError,
+    EvalReport,
+    ItemScore,
+    check_budget,
+    key_status,
+    run_evals,
+    write_report,
+)
 from understory.harness.golden import Expectation, GoldenItem, load_golden
 
 __all__ = [
     "DEFAULT_MODEL",
     "SYSTEM_PROMPT",
+    "BudgetError",
     "EvalReport",
     "Expectation",
     "GoldenItem",
     "ItemScore",
     "Turn",
     "build_agent",
+    "check_budget",
+    "key_status",
     "load_golden",
     "run_deterministic",
     "run_evals",

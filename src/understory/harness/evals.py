@@ -17,12 +17,23 @@ An item passes overall when every metric that applies to it passes.
 `run_evals` drives the real agent. `deterministic.run_deterministic` drives the
 same golden set straight through `Service.query_metrics` with no model, and
 returns the same `EvalReport`, so CI can run without an API key.
+
+A live run spends real money, so `run_evals` guards it. It reads the key's
+remaining credit before the first item, refuses to start when the balance will
+not cover the set, and stops at the first out of credits error rather than
+burning a request per remaining item to collect the same failure.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import threading
 import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +50,15 @@ from understory.server.session import extract_numbers
 TOLERANCE = 0.005
 """Relative slack on an expected number, on top of rounding to the shown precision."""
 
+BUDGET_PER_ITEM = 0.06
+"""USD one golden item cost when measured, uncached, on claude-sonnet-5."""
+
+KEY_URL = "https://openrouter.ai/api/v1/auth/key"
+"""Where OpenRouter reports a key's usage and remaining credit."""
+
+STOPPED_REASON = "stopped: out of credits"
+"""Why an item never ran. Set on every item after a 402."""
+
 _SUFFIX_SCALE = {
     "k": 1e3,
     "thousand": 1e3,
@@ -49,7 +69,7 @@ _SUFFIX_SCALE = {
     "billion": 1e9,
 }
 
-METRIC_NAMES = ("coverage", "resolution", "answer", "disclosure", "capture")
+METRIC_NAMES = ("coverage", "resolution", "answer", "disclosure", "capture", "clean")
 
 
 # --------------------------------------------------------------------------- #
@@ -72,16 +92,24 @@ class ItemScore(BaseModel):
     answer: bool | None = None
     disclosure: bool | None = None
     capture: bool | None = None
-    """None means the metric does not apply to this item."""
+    clean: bool | None = None
+    """False when the reply narrates the number check ("the 31 flag is just a date").
+
+    None means the metric does not apply to this item."""
 
     tool_calls: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     clarifications: list[str] = Field(default_factory=list)
     answer_text: str = ""
     log_answer_status: str | None = None
-    usage: dict[str, int] = Field(default_factory=dict)
+    usage: dict[str, float] = Field(default_factory=dict)
+    """Token counters, `requests`, `tool_calls` and `cost` in USD, summed over both turns."""
     elapsed_ms: int = 0
     error: str | None = None
+    error_status: int | None = None
+    """HTTP status of a provider error, when it had one. 402 means out of credits."""
+    skipped: bool = False
+    """True when the run stopped before this item, so nothing was measured."""
 
 
 class EvalReport(BaseModel):
@@ -107,10 +135,35 @@ class EvalReport(BaseModel):
             values = [v for v in (getattr(i, name) for i in self.items) if v is not None]
             out[f"{name}_rate"] = _rate(values)
             out[f"{name}_n"] = len(values)
-        tokens = sum(i.usage.get("total_tokens", 0) for i in self.items)
-        if tokens:
-            out["total_tokens"] = tokens
+        out.update(self.usage_summary())
+        skipped = [i.id for i in self.items if i.skipped]
+        if skipped:
+            out["skipped"] = skipped
+            out["stopped"] = STOPPED_REASON
         out["failures"] = [i.id for i in self.items if not i.passed]
+        return out
+
+    def usage_summary(self) -> dict[str, Any]:
+        """Token and cost totals, plus per item averages over the items that ran.
+
+        An item that never ran contributes nothing and is left out of the
+        denominator, so the averages describe what a question actually costs.
+        """
+        measured = [i.usage for i in self.items if i.usage]
+        if not measured:
+            return {}
+        out: dict[str, Any] = {}
+        for key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+            total = int(sum(u.get(key, 0) for u in measured))
+            out[key] = total
+            out[f"avg_{key}"] = round(total / len(measured), 1)
+        out["total_tokens"] = int(sum(u.get("total_tokens", 0) for u in measured))
+        out["requests"] = int(sum(u.get("requests", 0) for u in measured))
+        cost = sum(u.get("cost", 0.0) for u in measured)
+        if cost:
+            out["cost_usd"] = round(cost, 6)
+            out["avg_cost_usd"] = round(cost / len(measured), 6)
+        out["measured_items"] = len(measured)
         return out
 
     def markdown(self) -> str:
@@ -123,18 +176,29 @@ class EvalReport(BaseModel):
             f" | answer {_pct(s['answer_rate'])}"
             f" | disclosure {_pct(s['disclosure_rate'])}"
             f" | capture {_pct(s['capture_rate'])}"
+            f" | clean {_pct(s['clean_rate'])}"
             f" | {s['duration_s']}s\n\n"
         )
+        if "input_tokens" in s:
+            head += (
+                f"tokens in {s['input_tokens']:,} (cache read {s['cache_read_tokens']:,}, "
+                f"write {s['cache_write_tokens']:,}) out {s['output_tokens']:,}"
+                f" | {_cents(s.get('cost_usd'))} over {s['measured_items']} items,"
+                f" {_cents(s.get('avg_cost_usd'))} each\n\n"
+            )
+        if "stopped" in s:
+            head += f"{s['stopped']}: {', '.join(s['skipped'])}\n\n"
         rows = [
-            "| item | expected | observed | cov | res | ans | dis | cap | ok | why |",
-            "|---|---|---|---|---|---|---|---|---|---|",
+            "| item | expected | observed | cov | res | ans | dis | cap | cln | ok | cents | why |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for i in self.items:
             rows.append(
                 f"| {i.id} | {i.expected_status} | {i.observed_status} "
                 f"| {_mark(i.coverage)} | {_mark(i.resolution)} | {_mark(i.answer)} "
-                f"| {_mark(i.disclosure)} | {_mark(i.capture)} "
+                f"| {_mark(i.disclosure)} | {_mark(i.capture)} | {_mark(i.clean)} "
                 f"| {'pass' if i.passed else 'FAIL'} "
+                f"| {_cents(i.usage.get('cost'))} "
                 f"| {'; '.join(i.reasons).replace('|', '/')[:120]} |"
             )
         return head + "\n".join(rows) + "\n"
@@ -151,6 +215,76 @@ def write_report(report: EvalReport, tenant_root: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- #
+# Budget guards
+# --------------------------------------------------------------------------- #
+
+
+class BudgetError(RuntimeError):
+    """The key's remaining credit will not cover the set, and `force` was not set."""
+
+
+def key_status(api_key: str | None = None, *, timeout: float = 15.0) -> dict[str, Any]:
+    """What OpenRouter says about the key: usage, limit, limit_remaining.
+
+    Returns an empty dict when there is no key or the call fails, because a
+    balance we cannot read is not a reason to refuse to run.
+    """
+    key = api_key or os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        return {}
+    request = urllib.request.Request(KEY_URL, headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return {}
+    data = payload.get("data") if isinstance(payload, dict) else None
+    return data if isinstance(data, dict) else {}
+
+
+def check_budget(
+    items: int,
+    *,
+    api_key: str | None = None,
+    per_item: float = BUDGET_PER_ITEM,
+    force: bool = False,
+    echo: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Read the key's balance, report it, and refuse a run it cannot cover.
+
+    Raises `BudgetError` when `limit_remaining` is below `items * per_item`. A
+    key with no spend limit reports `limit_remaining: null`, which is unlimited
+    credit and always passes, as does a balance we could not read at all.
+    """
+    status = key_status(api_key)
+    estimate = items * per_item
+    if echo is not None:
+        if status:
+            echo(
+                f"openrouter key: usage ${_money(status.get('usage'))}"
+                f" limit {_limit(status.get('limit'))}"
+                f" remaining {_limit(status.get('limit_remaining'))}"
+                f" | {items} items at ${per_item:.3f} each needs ${estimate:.2f}"
+            )
+        else:
+            echo(f"openrouter key: balance unknown | {items} items needs about ${estimate:.2f}")
+
+    remaining = status.get("limit_remaining")
+    if not isinstance(remaining, int | float):
+        return status
+    if remaining >= estimate:
+        return status
+    if force:
+        if echo is not None:
+            echo(f"--force: starting anyway with ${remaining:.2f} left")
+        return status
+    raise BudgetError(
+        f"${remaining:.2f} of credit left, but {items} items at ${per_item:.3f} each need "
+        f"about ${estimate:.2f}. Lower --limit, lower --budget-per-item, or pass --force."
+    )
+
+
+# --------------------------------------------------------------------------- #
 # The agent eval
 # --------------------------------------------------------------------------- #
 
@@ -162,13 +296,41 @@ def run_evals(
     model: str | Model = DEFAULT_MODEL,
     api_key: str | None = None,
     concurrency: int = 1,
+    budget_per_item: float = BUDGET_PER_ITEM,
+    force: bool = False,
+    echo: Callable[[str], None] | None = None,
 ) -> EvalReport:
-    """Run every golden item through the agent and score it."""
+    """Run every golden item through the agent and score it.
+
+    A run against a real model id checks the key's balance first and raises
+    `BudgetError` rather than starting a set it cannot pay for. A `Model`
+    instance skips the check, because the tests pass one and spend nothing.
+
+    The first out of credits error stops the run. Every item after it comes back
+    `skipped`, so a half funded run produces a report that says which questions
+    were never asked instead of one 402 per remaining item.
+    """
+    if isinstance(model, str):
+        check_budget(len(items), api_key=api_key, per_item=budget_per_item, force=force, echo=echo)
+
     started = datetime.now(UTC)
     name = model_id(model)
+    stop = threading.Event()
+    lock = threading.Lock()
+    spent = 0.0
 
     def one(item: GoldenItem) -> ItemScore:
-        return _score_agent_item(service, item, model=model, api_key=api_key)
+        nonlocal spent
+        if stop.is_set():
+            return _skipped_score(item)
+        score = _score_agent_item(service, item, model=model, api_key=api_key)
+        if _out_of_credits(score):
+            stop.set()
+        with lock:
+            spent += score.usage.get("cost", 0.0)
+            if echo is not None:
+                echo(_progress(score, spent))
+        return score
 
     if concurrency > 1:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -186,6 +348,33 @@ def run_evals(
     )
 
 
+def _skipped_score(item: GoldenItem) -> ItemScore:
+    return ItemScore(
+        id=item.id,
+        question=item.question,
+        expected_status=item.expected.status,
+        observed_status="skipped",
+        skipped=True,
+        passed=False,
+        reasons=[STOPPED_REASON],
+        error=STOPPED_REASON,
+    )
+
+
+def _out_of_credits(score: ItemScore) -> bool:
+    """Did the provider refuse this item for money rather than for content?"""
+    if score.error_status == 402:
+        return True
+    text = (score.error or "").lower()
+    return "insufficient credit" in text or ("402" in text and "credit" in text)
+
+
+def _progress(score: ItemScore, spent: float) -> str:
+    cost = score.usage.get("cost")
+    money = f" {_cents(cost)}, ${spent:.4f} so far" if cost else ""
+    return f"  {score.id}: {'pass' if score.passed else 'FAIL'} {score.observed_status}{money}"
+
+
 def _score_agent_item(
     service: Service,
     item: GoldenItem,
@@ -200,14 +389,14 @@ def _score_agent_item(
 
     asked = [c.trap for c in first.clarifications]
     final = first
-    if exp.status == "needs_clarification" and exp.answers:
+    if exp.status == "needs_clarification" and exp.answers and not first.error:
         final = run_question(
             service,
-            item.question,
+            _answer_prompt(exp.answers),
             model=model,
             api_key=api_key,
             session_key=key,
-            clarification_answers=exp.answers,
+            message_history=first.messages,
         )
 
     score = ItemScore(
@@ -223,6 +412,7 @@ def _score_agent_item(
         usage=_merge_usage(first, final),
         elapsed_ms=int((time.monotonic() - t0) * 1000),
         error=final.error or first.error,
+        error_status=final.error_status or first.error_status,
     )
     reasons: list[str] = []
     if score.error:
@@ -260,9 +450,18 @@ def _score_agent_item(
             score.coverage = False
             reasons.append(f"queried {final.metrics_queried}, expected {exp.metrics}")
 
-    # Answer accuracy.
+    # Clean reply: the number check is internal and must not show in the answer.
+    kept, narrated = strip_narration(final.answer)
+    if final.answer:
+        score.clean = not narrated
+        if narrated:
+            reasons.append(f"reply narrates the number check: {narrated[0][:80]!r}")
+
+    # Answer accuracy, judged on the reply with narration removed. A number
+    # that appears only in "the 315 total wasn't in a tool result, so I'll
+    # drop it" was never answered.
     if exp.numbers:
-        missing = numbers_missing(exp.numbers, extract_numbers(final.answer))
+        missing = numbers_missing(exp.numbers, extract_numbers(kept))
         score.answer = not missing
         if missing:
             reasons.append(f"numbers missing from answer: {missing}")
@@ -288,6 +487,32 @@ def _score_agent_item(
 # --------------------------------------------------------------------------- #
 # Shared scoring helpers
 # --------------------------------------------------------------------------- #
+
+
+_NARRATION = re.compile(
+    r"log_answer|tool result|unsourced|flagged|not a real issue|false positive"
+    r"|let me rephrase|rephras|computed sum"
+    r"|drop(?:ping)? (?:that|the) (?:computed )?(?:sum|total|number)",
+    re.IGNORECASE,
+)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def strip_narration(text: str) -> tuple[str, list[str]]:
+    """Split the reply into sentences and drop the ones that talk about the check.
+
+    Returns the kept text and the sentences removed. The check is internal;
+    a reply that says "that 31 flag is just the date" has leaked it.
+    """
+    if not text:
+        return "", []
+    kept: list[str] = []
+    dropped: list[str] = []
+    for sentence in _SENTENCE.split(text):
+        if not sentence.strip():
+            continue
+        (dropped if _NARRATION.search(sentence) else kept).append(sentence.strip())
+    return " ".join(kept), dropped
 
 
 def numbers_missing(
@@ -344,7 +569,16 @@ def _observed(first: Turn, final: Turn) -> str:
     return final.statuses[-1] if final.statuses else "none"
 
 
-def _merge_usage(first: Turn, final: Turn) -> dict[str, int]:
+def _answer_prompt(answers: dict[str, str]) -> str:
+    """The user's reply to a clarification, as the next message of the same chat."""
+    pairs = "; ".join(f"{trap} = {choice}" for trap, choice in answers.items())
+    return (
+        f"My answers: {pairs}. Run the query again with those as the clarifications "
+        "field and give me the number."
+    )
+
+
+def _merge_usage(first: Turn, final: Turn) -> dict[str, float]:
     out = dict(first.usage)
     if final is not first:
         for k, v in final.usage.items():
@@ -371,15 +605,33 @@ def _mark(value: bool | None) -> str:
     return "-" if value is None else ("y" if value else "N")
 
 
+def _cents(usd: float | None) -> str:
+    return "-" if not usd else f"{usd * 100:.2f}c"
+
+
+def _money(value: Any) -> str:
+    return f"{value:.4f}" if isinstance(value, int | float) else "?"
+
+
+def _limit(value: Any) -> str:
+    return f"${value:.2f}" if isinstance(value, int | float) else "none"
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "model"
 
 
 __all__ = [
+    "BUDGET_PER_ITEM",
+    "KEY_URL",
     "METRIC_NAMES",
+    "STOPPED_REASON",
     "TOLERANCE",
+    "BudgetError",
     "EvalReport",
     "ItemScore",
+    "check_budget",
+    "key_status",
     "numbers_missing",
     "run_evals",
     "write_report",
