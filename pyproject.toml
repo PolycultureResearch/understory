@@ -55,6 +55,8 @@ asyncio_mode = "auto"
 markers = [
     "metricflow: needs the mf CLI and a dbt project (slow)",
     "fake_db: needs the fake_companies DuckDB files",
+    "live: calls OpenRouter; needs OPENROUTER_API_KEY",
+    "slow: takes more than a few seconds",
 ]
 
 [tool.ruff]

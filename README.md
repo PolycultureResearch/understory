@@ -12,13 +12,52 @@ The billable work at each client is the dbt model and semantic layer. Understory
 - [Roadmap](docs/understory-roadmap.md). What comes after the MVP and why it waits, including the Breakdown-based explanation engine for "why did X change" questions.
 - [Architecture draft 0.1](agentic-analytics-architecture.md). The original design. The MVP design supersedes its sections 3 through 8.
 
+## Quickstart
+
+Understory develops against [fake_companies](https://github.com/PolycultureResearch/fake_companies), four synthetic companies with dbt projects and MetricFlow metrics on DuckDB. Clone it as a sibling directory (or set `FAKE_COMPANIES_DIR`), generate a company, and build its dbt project:
+
+```bash
+cd ../fake_companies && uv sync --extra dbt
+uv run fake-companies generate --config configs/alpenglow_retail_dtc.yaml --out out/alpenglow.duckdb
+DBT_PROFILES_DIR=dbt/retail_dtc FAKE_DB=$PWD/out/alpenglow.duckdb uv run dbt build --project-dir dbt/retail_dtc
+```
+
+Then, in this repo:
+
+```bash
+uv sync --all-extras
+uv run understory check --tenant tenants/alpenglow      # manifest, traps, warehouse, freshness
+uv run understory serve --tenant tenants/alpenglow      # MCP over streamable HTTP at :8000/mcp
+uv run pytest                                            # 170 tests; DuckDB and mf tests skip if data is absent
+```
+
+Point any MCP client at `http://127.0.0.1:8000/mcp`. For a chatbot on the internet, run the container and put it behind HTTPS with `auth.mode: static` in `tenant.yml`.
+
+## Layout
+
+```
+src/understory/
+  server/      MCP tools (mcp.py), tool logic (service.py), sessions, windows, auth, serve CLI
+  catalog/     semantic_manifest.json reader, get_context assembly, describe
+  traps/       traps registry schema, matcher, CI check, `understory traps check`
+  semantic/    SemanticLayer: metricflow_local (mf query --explain + cache), dbt_cloud
+  warehouse/   Warehouse: duckdb, bigquery
+  guard/       sqlglot read-only SQL guard for run_sql
+  telemetry/   write-only Parquet log in two families, HMAC user hashing
+  harness/     Pydantic AI agent over OpenRouter, golden sets, eval runner
+dbt_understory/  dbt package modeling the log: fct_questions, fct_sessions, mart_eval_daily, ...
+tenants/         one directory per client; four fake_companies tenants committed
+```
+
+A tenant is a directory: `tenant.yml`, `context.md`, `traps.yml`, `semantic_manifest.json`, and `golden/questions.yml`.
+
 ## Stack
 
-Python 3.13, the official MCP SDK, open-source MetricFlow, DuckDB and BigQuery, Parquet, dbt, sqlglot, Pydantic AI over OpenRouter. Development and tests run against [fake_companies](https://github.com/PolycultureResearch/fake_companies), never client data.
+Python 3.13, the official MCP SDK, open-source MetricFlow, DuckDB and BigQuery, Parquet, dbt, sqlglot, Pydantic AI over OpenRouter.
 
 ## Status
 
-Design stage. No code yet.
+MVP in progress on the `mvp-scaffold` branch. The server, all seven tools, and the telemetry package work end to end against the four fake tenants. Not yet done: the LLM harness and golden-set evals, and a deployment against a real client warehouse.
 
 ## Related
 

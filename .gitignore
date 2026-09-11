@@ -9,3 +9,4 @@ tenants/*/.cache/
 *.duckdb
 *.egg-info/
 .env
+tenants/*/.evals/
