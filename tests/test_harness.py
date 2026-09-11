@@ -39,6 +39,7 @@ from understory.harness.evals import (
     ItemScore,
     numbers_missing,
     run_evals,
+    strip_narration,
     write_report,
 )
 from understory.harness.golden import load_golden
@@ -609,3 +610,73 @@ def test_live_openrouter(alpenglow_db):
         assert summary["cache_write_tokens"] > 0, "nothing was ever written to the cache"
         assert summary["cache_read_tokens"] > 0, "the cached prefix was never read back"
         assert summary["cache_read_tokens"] > summary["input_tokens"] * 0.3
+
+
+# --------------------------------------------------------------------------- #
+# The false pass from the first live run: an expected number that appears only
+# in the model's sentence about dropping it must not count, and the reply that
+# narrates the check is not clean.
+# --------------------------------------------------------------------------- #
+
+_LEAKED = (
+    "The 315 total wasn't in a tool result, so I'll drop that computed sum and report "
+    "the monthly figures instead. Trials started in Germany, Jan to Jun 2025, by month: "
+    "Jan 49, Feb 42, Mar 44, Apr 52, May 67, Jun 61. The window is anchored to the "
+    "latest available data, not today."
+)
+
+
+def test_strip_narration_removes_sentences_about_the_check():
+    kept, dropped = strip_narration(_LEAKED)
+    assert len(dropped) == 1 and "315" in dropped[0]
+    assert "315" not in kept and "Jan 49" in kept
+    kept, dropped = strip_narration("Orders were 16,016. That's all.")
+    assert dropped == [] and "16,016" in kept
+    assert strip_narration("") == ("", [])
+    _, dropped = strip_narration("That's just the 31 in Mar 31 being flagged, not a real issue.")
+    assert dropped
+
+
+def _narrating(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Runs the covered query, then replies with the leaked narration."""
+    returned = {
+        part.tool_name: part.content
+        for m in messages
+        if isinstance(m, ModelRequest)
+        for part in m.parts
+        if isinstance(part, ToolReturnPart)
+    }
+    if "get_context" not in returned:
+        return ModelResponse(parts=[ToolCallPart("get_context", {})])
+    if "query_metrics" not in returned:
+        return ModelResponse(parts=[ToolCallPart("query_metrics", {"spec": _SPEC})])
+    if "log_answer" not in returned:
+        return ModelResponse(parts=[ToolCallPart("log_answer", {"draft": _LEAKED})])
+    return ModelResponse(parts=[TextPart(_LEAKED)])
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_narrated_number_does_not_pass_and_reply_is_not_clean(alpenglow_db):
+    from understory.harness.golden import Expectation, GoldenItem
+
+    item = GoldenItem(
+        id="narrated",
+        question=_SPEC["question"],
+        spec=_SPEC,
+        expected=Expectation(status="resolved", metrics=["net_revenue"], numbers=[315]),
+    )
+    service = _service(alpenglow_db)
+    try:
+        report = run_evals(service, [item], model=FunctionModel(_narrating))
+    finally:
+        service.close()
+
+    score = report.items[0]
+    assert score.answer is False, score.reasons
+    assert score.clean is False
+    assert not score.passed
+    assert any("narrates" in r for r in score.reasons)
+    assert any("315" in r for r in score.reasons)
+    assert report.summary()["clean_rate"] == 0.0
+    assert "| cln |" in report.markdown()

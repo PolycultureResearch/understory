@@ -59,6 +59,7 @@ Five per-item metrics, each true, false, or not applicable:
 - **Answer.** Every expected number appears in the reply, within rounding or 0.5%.
 - **Disclosure.** Every expected substring appears in the reply, case-insensitive.
 - **Capture.** `log_answer` was called at least once.
+- **Clean.** Added after this run. False when the reply narrates the number check. Not part of the rates in section 1.
 
 An item passes when every applicable metric is true. Rates are over applicable items only, so disclosure rate is over the four or five items per tenant that declared one.
 
@@ -221,7 +222,7 @@ Grouped by where the change lives. Items marked done were made on September 11.
 
 - Credit a prose refusal for unanswerable and invalid items. Done. Keep reporting how many refusals reached the server, since that is the telemetry gap in numbers.
 - Normalize hyphens and whitespace in disclosure matching. Done.
-- Ignore expected numbers that appear only in a sentence about dropping them, or fail an item whose reply narrates the check.
+- Ignore expected numbers that appear only in a sentence about dropping them, and fail an item whose reply narrates the check. Done: a sixth metric, clean, is false when any sentence in the reply talks about the number check, and the answer check runs on the reply with those sentences removed. The Germany trials item now fails on both counts.
 - Capture token usage and cost per item. In progress.
 
 **Golden sets**

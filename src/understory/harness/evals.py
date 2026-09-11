@@ -69,7 +69,7 @@ _SUFFIX_SCALE = {
     "billion": 1e9,
 }
 
-METRIC_NAMES = ("coverage", "resolution", "answer", "disclosure", "capture")
+METRIC_NAMES = ("coverage", "resolution", "answer", "disclosure", "capture", "clean")
 
 
 # --------------------------------------------------------------------------- #
@@ -92,7 +92,10 @@ class ItemScore(BaseModel):
     answer: bool | None = None
     disclosure: bool | None = None
     capture: bool | None = None
-    """None means the metric does not apply to this item."""
+    clean: bool | None = None
+    """False when the reply narrates the number check ("the 31 flag is just a date").
+
+    None means the metric does not apply to this item."""
 
     tool_calls: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
@@ -173,6 +176,7 @@ class EvalReport(BaseModel):
             f" | answer {_pct(s['answer_rate'])}"
             f" | disclosure {_pct(s['disclosure_rate'])}"
             f" | capture {_pct(s['capture_rate'])}"
+            f" | clean {_pct(s['clean_rate'])}"
             f" | {s['duration_s']}s\n\n"
         )
         if "input_tokens" in s:
@@ -185,14 +189,14 @@ class EvalReport(BaseModel):
         if "stopped" in s:
             head += f"{s['stopped']}: {', '.join(s['skipped'])}\n\n"
         rows = [
-            "| item | expected | observed | cov | res | ans | dis | cap | ok | cents | why |",
-            "|---|---|---|---|---|---|---|---|---|---|---|",
+            "| item | expected | observed | cov | res | ans | dis | cap | cln | ok | cents | why |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for i in self.items:
             rows.append(
                 f"| {i.id} | {i.expected_status} | {i.observed_status} "
                 f"| {_mark(i.coverage)} | {_mark(i.resolution)} | {_mark(i.answer)} "
-                f"| {_mark(i.disclosure)} | {_mark(i.capture)} "
+                f"| {_mark(i.disclosure)} | {_mark(i.capture)} | {_mark(i.clean)} "
                 f"| {'pass' if i.passed else 'FAIL'} "
                 f"| {_cents(i.usage.get('cost'))} "
                 f"| {'; '.join(i.reasons).replace('|', '/')[:120]} |"
@@ -446,9 +450,18 @@ def _score_agent_item(
             score.coverage = False
             reasons.append(f"queried {final.metrics_queried}, expected {exp.metrics}")
 
-    # Answer accuracy.
+    # Clean reply: the number check is internal and must not show in the answer.
+    kept, narrated = strip_narration(final.answer)
+    if final.answer:
+        score.clean = not narrated
+        if narrated:
+            reasons.append(f"reply narrates the number check: {narrated[0][:80]!r}")
+
+    # Answer accuracy, judged on the reply with narration removed. A number
+    # that appears only in "the 315 total wasn't in a tool result, so I'll
+    # drop it" was never answered.
     if exp.numbers:
-        missing = numbers_missing(exp.numbers, extract_numbers(final.answer))
+        missing = numbers_missing(exp.numbers, extract_numbers(kept))
         score.answer = not missing
         if missing:
             reasons.append(f"numbers missing from answer: {missing}")
@@ -474,6 +487,32 @@ def _score_agent_item(
 # --------------------------------------------------------------------------- #
 # Shared scoring helpers
 # --------------------------------------------------------------------------- #
+
+
+_NARRATION = re.compile(
+    r"log_answer|tool result|unsourced|flagged|not a real issue|false positive"
+    r"|let me rephrase|rephras|computed sum"
+    r"|drop(?:ping)? (?:that|the) (?:computed )?(?:sum|total|number)",
+    re.IGNORECASE,
+)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def strip_narration(text: str) -> tuple[str, list[str]]:
+    """Split the reply into sentences and drop the ones that talk about the check.
+
+    Returns the kept text and the sentences removed. The check is internal;
+    a reply that says "that 31 flag is just the date" has leaked it.
+    """
+    if not text:
+        return "", []
+    kept: list[str] = []
+    dropped: list[str] = []
+    for sentence in _SENTENCE.split(text):
+        if not sentence.strip():
+            continue
+        (dropped if _NARRATION.search(sentence) else kept).append(sentence.strip())
+    return " ".join(kept), dropped
 
 
 def numbers_missing(
