@@ -34,6 +34,8 @@ def test_extract_numbers():
     assert nums["8.5%"] == 8.5
     assert nums["1.2M"] == 1_200_000
     assert nums["2025"] == 2025
+    dated = dict(extract_numbers("From 2025-03-01 to 2025-03-31, orders were 16,016."))
+    assert list(dated) == ["16,016"]
 
 
 def test_review_answer_traces_numbers():

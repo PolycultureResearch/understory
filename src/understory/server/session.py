@@ -120,9 +120,17 @@ class SessionStore:
 # --------------------------------------------------------------------------- #
 
 
+_ISO_DATE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2})?(?:T[\d:]+)?\b")
+
+
 def extract_numbers(text: str) -> list[tuple[str, float]]:
-    """Every number in the draft as (literal, value). Percent stays as the shown value."""
+    """Every number in the draft as (literal, value). Percent stays as the shown value.
+
+    ISO dates are removed first so "2025-03-31" does not yield 31 as a number
+    that needs a source. Answers quote windows as dates all the time.
+    """
     out: list[tuple[str, float]] = []
+    text = _ISO_DATE.sub(" ", text)
     for m in _NUMBER.finditer(text):
         literal = m.group(0).strip()
         int_part = m.group(1).replace(",", "")

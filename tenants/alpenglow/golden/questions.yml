@@ -1,0 +1,141 @@
+# Alpenglow Supply Co. (retail DTC) golden set.
+#
+# Expected numbers come from the seed-deterministic DuckDB build, rounded to two
+# decimals. Windows are explicit wherever numbers are recorded so the values do
+# not move when the data is regenerated with a later end date.
+version: 1
+
+questions:
+  - id: net_revenue_by_month_q1_2025
+    question: "What was net revenue by month from January through March 2025?"
+    notes: >
+      Covered question. The metric is named directly, so the revenue collision
+      must not fire: 'net revenue' is masked out before the phrase is matched.
+    spec:
+      metrics: [net_revenue]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      numbers: [997759.25, 951335.65, 1043396.05]
+
+  - id: sales_collision_march_2025
+    question: "How were sales in March 2025?"
+    notes: >
+      The tenant's main collision. 'sales' maps to both revenue metrics, policy
+      is ask, and the second turn answers net_revenue.
+    spec:
+      metrics: [gross_revenue]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:revenue"]
+      answers: {"collision:revenue": net_revenue}
+      metrics: [net_revenue]
+      numbers: [1043396.05]
+
+  - id: net_revenue_by_country_prefer
+    question: "Net revenue by country for the first quarter of 2025"
+    notes: >
+      Dimension role with a prefer policy. 'country' is ambiguous between the
+      customer and the order, order__country wins, and the disclosure says so.
+    spec:
+      metrics: [net_revenue]
+      group_by: [order__country]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["order shipped"]
+      numbers: [2150117.55, 385646.15, 271151.75, 185575.5]
+
+  - id: margin_collision_q2_2025
+    question: "What was our margin in the second quarter of 2025?"
+    spec:
+      metrics: [gross_margin]
+      time: {start: 2025-04-01, end: 2025-06-30}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:margin"]
+      answers: {"collision:margin": margin_rate}
+      metrics: [margin_rate]
+      numbers: [0.5821]
+
+  - id: returns_collision_april_2025
+    question: "How did returns look in April 2025?"
+    spec:
+      metrics: [returned_units]
+      time: {start: 2025-04-01, end: 2025-04-30}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:returns"]
+      answers: {"collision:returns": return_rate}
+      metrics: [return_rate]
+      numbers: [0.0636]
+
+  - id: profit_by_sku_unanswerable
+    question: "What is our profit by SKU?"
+    notes: "Declared out of scope. COGS only exists at category grain."
+    spec:
+      metrics: [gross_margin]
+      group_by: [order_item__category]
+    expected:
+      status: unanswerable
+      disclosures: ["category grain"]
+
+  - id: ltv_unanswerable
+    question: "What is the lifetime value of our customers?"
+    spec:
+      metrics: [net_revenue]
+    expected:
+      status: unanswerable
+      disclosures: ["repeat order share"]
+
+  - id: promo_dimension_invalid
+    question: "What was the return rate for orders that used a promo code?"
+    notes: "Valid metric, missing dimension. The spec is rejected before the traps run."
+    spec:
+      metrics: [return_rate]
+      group_by: [order__promo_code]
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: invalid
+
+  - id: orders_no_window
+    question: "How many orders have we had?"
+    notes: >
+      No time window at all. default_window has policy ask_if_absent, so the
+      server asks which window before it runs anything.
+    spec:
+      metrics: [orders]
+    expected:
+      status: needs_clarification
+      clarification_traps: ["convention:default_window"]
+      answers: {"convention:default_window": trailing_30_days}
+      metrics: [orders]
+      disclosures: ["30 days"]
+      numbers: [15996]
+
+  - id: units_hoodies_h1_2025
+    question: "How many units did we sell in the hoodies category in the first half of 2025?"
+    notes: "Needs search_dimension_values to learn that the category value is 'hoodies'."
+    spec:
+      metrics: [units]
+      where:
+        - {dimension: order_item__category, op: eq, values: [hoodies]}
+      time: {start: 2025-01-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [units]
+      numbers: [14775]
+
+  - id: repeat_order_share_2025
+    question: "What share of orders in 2025 came from existing customers?"
+    spec:
+      metrics: [repeat_order_share]
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [repeat_order_share]
+      numbers: [0.5612]
