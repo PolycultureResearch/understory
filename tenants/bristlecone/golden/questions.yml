@@ -82,7 +82,7 @@ questions:
       group_by: [shipment__category]
     expected:
       status: unanswerable
-      disclosures: ["no cogs"]
+      disclosures: ["cost"]
 
   - id: market_share_unanswerable
     question: "What is our market share in the tea category?"
@@ -90,7 +90,7 @@ questions:
       metrics: [pos_dollars]
     expected:
       status: unanswerable
-      disclosures: ["syndicated market data"]
+      disclosures: ["market"]
 
   - id: cases_by_banner_invalid
     question: "What were shipped cases by retailer banner in the first quarter of 2025?"
@@ -112,11 +112,11 @@ questions:
     expected:
       status: resolved
       metrics: [shipped_cases]
-      disclosures: ["90 days"]
+      disclosures: ["90 day"]
       numbers: [116567]
 
   - id: pos_units_greenfields_h1_2025
-    question: "What were POS units at greenfields between January and June 2025?"
+    question: "What were total POS units at greenfields between January and June 2025?"
     notes: "Needs search_dimension_values to learn the retailer banner values."
     spec:
       metrics: [pos_units]

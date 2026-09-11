@@ -36,6 +36,6 @@ conventions:
 
 unanswerable:
   - phrase: [margin, profit, gross margin]
-    reason: "No COGS in the warehouse. Ask about net revenue or trade spend instead."
+    reason: "No cost of goods (COGS) in the warehouse. Ask about net revenue or trade spend instead."
   - phrase: [market share, share of shelf]
     reason: "No syndicated market data yet."

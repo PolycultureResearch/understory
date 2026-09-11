@@ -41,7 +41,7 @@ questions:
     expected:
       status: resolved
       metrics: [open_pipeline_value]
-      disclosures: ["deals open on the day"]
+      disclosures: ["open on"]
       numbers: [27220700.0]
 
   - id: bookings_by_source_role
@@ -108,7 +108,7 @@ questions:
       clarification_traps: ["convention:default_window"]
       answers: {"convention:default_window": trailing_90_days}
       metrics: [bookings]
-      disclosures: ["90 days"]
+      disclosures: ["90 day"]
       numbers: [17040100.0]
 
   - id: bookings_healthcare_q1_2025

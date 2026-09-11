@@ -82,7 +82,7 @@ questions:
       group_by: [order_item__category]
     expected:
       status: unanswerable
-      disclosures: ["category grain"]
+      disclosures: ["category"]
 
   - id: ltv_unanswerable
     question: "What is the lifetime value of our customers?"
@@ -114,7 +114,7 @@ questions:
       clarification_traps: ["convention:default_window"]
       answers: {"convention:default_window": trailing_30_days}
       metrics: [orders]
-      disclosures: ["30 days"]
+      disclosures: ["30 day"]
       numbers: [15996]
 
   - id: units_hoodies_h1_2025

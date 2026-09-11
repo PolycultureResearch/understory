@@ -372,6 +372,7 @@ Steps 1 through 6 run entirely on fake_companies. Step 7 is the first time clien
 
 ## 16. Open questions
 
+- A capable model refuses from `get_context` alone. In the first live eval, every unanswerable and invalid question was refused correctly without a single call to `query_metrics`, so the refusal never reached the traps registry or the telemetry. The answers were right and the backlog was empty. The harness now asks the model to call `log_answer` even when it never queried, which records the draft. Whether to add a dedicated refusal event, or to move the unanswerable list out of the context document so the model has to ask, is a decision for after the first client.
 - Exact connector auth options on ChatGPT Enterprise and Claude.ai today, and whether either accepts a static bearer token for a pilot.
 - MetricFlow compile latency on BigQuery-backed projects, and whether the compile cache is enough or a warm process is needed.
 - Whether `run_sql` should be visible to every user or gated by a tenant-level role list. The MVP exposes it to everyone with the ungoverned label and we measure how often it is used.

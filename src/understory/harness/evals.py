@@ -234,7 +234,13 @@ def _score_agent_item(
         if not score.resolution:
             reasons.append(f"asked {asked or 'nothing'}, expected {exp.clarification_traps}")
     elif exp.status in ("unanswerable", "invalid"):
-        score.resolution = exp.status in final.statuses
+        # A model that reads get_context and refuses without querying is right
+        # too. The server never saw it, which the design notes as a telemetry
+        # gap, but the answer is correct, so it scores as a prose refusal.
+        refused_in_prose = "resolved" not in final.statuses and not asked and not final.governed
+        score.resolution = exp.status in final.statuses or refused_in_prose
+        if refused_in_prose and exp.status not in final.statuses:
+            score.observed_status = "refused_in_prose"
         if not score.resolution:
             reasons.append(f"statuses {final.statuses}, expected {exp.status}")
     else:
@@ -263,7 +269,8 @@ def _score_agent_item(
 
     # Disclosure rate.
     if exp.disclosures:
-        missing_text = [d for d in exp.disclosures if d.lower() not in final.answer.lower()]
+        answer_norm = _norm_text(final.answer)
+        missing_text = [d for d in exp.disclosures if _norm_text(d) not in answer_norm]
         score.disclosure = not missing_text
         if missing_text:
             reasons.append(f"disclosures missing: {missing_text}")
@@ -343,6 +350,11 @@ def _merge_usage(first: Turn, final: Turn) -> dict[str, int]:
         for k, v in final.usage.items():
             out[k] = out.get(k, 0) + v
     return out
+
+
+def _norm_text(text: str) -> str:
+    """Lowercase, hyphens and underscores to spaces, whitespace collapsed."""
+    return re.sub(r"\s+", " ", re.sub(r"[-_]", " ", text.lower())).strip()
 
 
 def _rate(values: list[bool]) -> float | None:
