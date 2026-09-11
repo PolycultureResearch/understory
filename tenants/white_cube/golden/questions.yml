@@ -1,0 +1,148 @@
+# White Cube (B2C SaaS) golden set.
+#
+# Expected numbers come from the seed-deterministic DuckDB build, rounded to two
+# decimals. Windows are explicit wherever numbers are recorded.
+version: 1
+
+questions:
+  - id: net_new_mrr_by_month_q1_2025
+    question: "What was net new MRR by month in the first quarter of 2025?"
+    notes: >
+      Covered question. 'net new mrr' is a candidate of the mrr collision, so it
+      is masked before the phrase is matched and the collision must not fire.
+    spec:
+      metrics: [net_new_mrr]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_new_mrr]
+      numbers: [2578.5, 2815.67, 3212]
+
+  - id: revenue_collision_march_2025
+    question: "How much revenue did we bring in during March 2025?"
+    notes: >
+      The tenant's main collision: cash revenue against MRR. Policy is ask and
+      the second turn picks the payments metric.
+    spec:
+      metrics: [revenue]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:revenue"]
+      answers: {"collision:revenue": revenue}
+      metrics: [revenue]
+      numbers: [31128]
+
+  - id: mrr_by_month_h1_2025
+    question: "What was MRR by month over the first half of 2025?"
+    notes: "'mrr' collides with six movement metrics; the policy prefers plain mrr."
+    spec:
+      metrics: [mrr]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [mrr]
+      numbers: [419991.83, 446819.17, 580697.67, 646491.33, 759893.67, 839275.67]
+
+  - id: signups_by_country_prefer
+    question: "How many signups came from each country in the first quarter of 2025?"
+    notes: "Dimension role with a prefer policy; the disclosure names the signup country."
+    spec:
+      metrics: [signups]
+      group_by: [user__country]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [signups]
+      disclosures: ["signup country"]
+      numbers: [1432, 462, 333]
+
+  - id: churn_collision_q2_2025
+    question: "What was our churn in the second quarter of 2025?"
+    spec:
+      metrics: [churned_subscriptions]
+      time: {start: 2025-04-01, end: 2025-06-30}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:churn"]
+      answers: {"collision:churn": churned_mrr}
+      metrics: [churned_mrr]
+      numbers: [2545.5]
+
+  - id: active_users_collision_may_2025
+    question: "How many active users did we have in May 2025?"
+    spec:
+      metrics: [dau]
+      time: {start: 2025-05-01, end: 2025-05-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:active_users"]
+      answers: {"collision:active_users": dau}
+      metrics: [dau]
+      numbers: [10388]
+
+  - id: ltv_unanswerable
+    question: "What is the lifetime value of a customer?"
+    spec:
+      metrics: [revenue]
+    expected:
+      status: unanswerable
+      disclosures: ["churn rate"]
+
+  - id: nps_unanswerable
+    question: "What is our NPS this year?"
+    spec:
+      metrics: [signups]
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: unanswerable
+      disclosures: ["survey data"]
+
+  - id: mrr_by_industry_invalid
+    question: "What was MRR broken down by industry in the first quarter of 2025?"
+    notes: "Valid metric, missing dimension. Rejected before the traps run."
+    spec:
+      metrics: [mrr]
+      group_by: [subscription_day__industry]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: invalid
+
+  - id: signups_no_window
+    question: "How many signups have we had?"
+    notes: "No window, and default_window is ask_if_absent, so the server asks first."
+    spec:
+      metrics: [signups]
+    expected:
+      status: needs_clarification
+      clarification_traps: ["convention:default_window"]
+      answers: {"convention:default_window": trailing_30_days}
+      metrics: [signups]
+      disclosures: ["30 days"]
+      numbers: [3167]
+
+  - id: trials_germany_h1_2025
+    question: "How many trials started in Germany in the first half of 2025?"
+    notes: "Needs search_dimension_values to learn that Germany is stored as 'DE'."
+    spec:
+      metrics: [trials_started]
+      where:
+        - {dimension: trial__country, op: eq, values: [DE]}
+      time: {start: 2025-01-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [trials_started]
+      numbers: [315]
+
+  - id: trial_conversion_rate_q1_2025
+    question: "What was the trial conversion rate for trials started in the first quarter of 2025?"
+    notes: "'trial conversion rate' is a candidate name, so the conversion collision is masked."
+    spec:
+      metrics: [trial_conversion_rate]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [trial_conversion_rate]
+      numbers: [0.2161]

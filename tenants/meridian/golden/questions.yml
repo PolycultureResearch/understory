@@ -1,0 +1,145 @@
+# Meridian Partners (B2B services) golden set.
+#
+# Expected numbers come from the seed-deterministic DuckDB build, rounded to two
+# decimals. Windows are explicit wherever numbers are recorded.
+version: 1
+
+questions:
+  - id: bookings_by_month_q1_2025
+    question: "What were bookings by month in the first quarter of 2025?"
+    notes: "Covered question: the metric is named, so the revenue collision does not fire."
+    spec:
+      metrics: [bookings]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [bookings]
+      numbers: [3018200.0, 3592800.0, 4391300.0]
+
+  - id: revenue_collision_q1_2025
+    question: "How much revenue did we make in the first quarter of 2025?"
+    notes: >
+      The tenant's main collision: bookings against invoiced revenue against
+      collected cash. Three candidates, policy ask.
+    spec:
+      metrics: [bookings]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:revenue"]
+      answers: {"collision:revenue": invoiced_revenue}
+      metrics: [invoiced_revenue]
+      numbers: [10440460.0]
+
+  - id: pipeline_prefer_march_2025
+    question: "What was our pipeline worth on the last day of March 2025?"
+    notes: "'pipeline' has a prefer policy, so it resolves silently with a disclosure."
+    spec:
+      metrics: [open_pipeline_value]
+      time: {start: 2025-03-31, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [open_pipeline_value]
+      disclosures: ["deals open on the day"]
+      numbers: [27220700.0]
+
+  - id: bookings_by_source_role
+    question: "What were bookings by source in the first quarter of 2025?"
+    notes: >
+      Dimension role with an ask policy: source lives on three different
+      entities and they do not mean the same thing.
+    spec:
+      metrics: [bookings]
+      group_by: [won_deal__source]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["dimension_role:source"]
+      answers: {"dimension_role:source": won_deal__source}
+      metrics: [bookings]
+      numbers: [5160800.0, 2964700.0, 2314600.0, 562200]
+
+  - id: deals_collision_february_2025
+    question: "How many deals did we close in February 2025?"
+    spec:
+      metrics: [deals_won]
+      time: {start: 2025-02-01, end: 2025-02-28}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:deals"]
+      answers: {"collision:deals": deals_won}
+      metrics: [deals_won]
+      numbers: [92]
+
+  - id: quota_unanswerable
+    question: "What was quota attainment for the team?"
+    spec:
+      metrics: [bookings]
+    expected:
+      status: unanswerable
+      disclosures: ["no quota"]
+
+  - id: forecast_unanswerable
+    question: "What is the forecast for next quarter?"
+    spec:
+      metrics: [bookings]
+    expected:
+      status: unanswerable
+      disclosures: ["open pipeline value"]
+
+  - id: bookings_by_region_invalid
+    question: "What were bookings by region in the first quarter of 2025?"
+    notes: "Region exists on deals but not on won deals, so the spec is invalid for bookings."
+    spec:
+      metrics: [bookings]
+      group_by: [deal__region]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: invalid
+
+  - id: bookings_no_window
+    question: "What were bookings?"
+    notes: "No window, and default_window is ask_if_absent with a 90 day default."
+    spec:
+      metrics: [bookings]
+    expected:
+      status: needs_clarification
+      clarification_traps: ["convention:default_window"]
+      answers: {"convention:default_window": trailing_90_days}
+      metrics: [bookings]
+      disclosures: ["90 days"]
+      numbers: [17040100.0]
+
+  - id: bookings_healthcare_q1_2025
+    question: "What were bookings from healthcare clients in the first quarter of 2025?"
+    notes: "Needs search_dimension_values to confirm the industry value is 'healthcare'."
+    spec:
+      metrics: [bookings]
+      where:
+        - {dimension: won_deal__industry, op: eq, values: [healthcare]}
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [bookings]
+      numbers: [1829700.0]
+
+  - id: collected_cash_q1_2025
+    question: "How much cash did we collect in the first quarter of 2025?"
+    spec:
+      metrics: [collected_cash]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [collected_cash]
+      numbers: [10656880.0]
+
+  - id: win_rate_q1_2025
+    question: "What was our win rate in the first quarter of 2025?"
+    spec:
+      metrics: [win_rate]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [win_rate]
+      numbers: [0.0699]

@@ -1,0 +1,131 @@
+version: 2
+
+models:
+  - name: int_understory__sessionized_events
+    description: >
+      Every event with a derived_session_id from gap-based sessionization per
+      tenant and user_hash. Not for direct use; the facts build on it.
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: derived_session_id
+        tests: [not_null]
+
+  - name: fct_sessions
+    description: >
+      One row per derived session. A session is a run of events by one
+      user_hash with no gap of understory_session_gap_minutes or more.
+    columns:
+      - name: derived_session_id
+        tests: [not_null, unique]
+      - name: tenant
+        tests: [not_null]
+      - name: user_hash
+        tests: [not_null]
+      - name: session_id
+        description: The server's session id for the first connection in the derived session.
+        tests: [not_null]
+      - name: server_session_count
+        description: Distinct server session ids folded into this session.
+      - name: log_answer_called
+        description: True when at least one answer_logged event fell in the session.
+
+  - name: fct_questions
+    description: >
+      One row per query_executed or refused event. This is the grain the eval
+      rates are computed over.
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: tenant
+        tests: [not_null]
+      - name: user_hash
+        tests: [not_null]
+      - name: session_id
+        tests: [not_null]
+      - name: derived_session_id
+        tests: [not_null]
+      - name: status
+        description: resolved for executed queries; the refusal reason otherwise.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [resolved, unanswerable, invalid, uncovered, sql_rejected, too_broad]
+      - name: governed
+        description: True when the SQL came from the semantic layer. False for run_sql and refusals.
+        tests: [not_null]
+      - name: latency_ms
+        description: Execution latency for query_executed; null for refusals.
+
+  - name: fct_clarifications
+    description: >
+      One row per clarification_returned, matched to the first
+      clarification_applied for the same trap within the same server session.
+    columns:
+      - name: returned_event_id
+        tests: [not_null, unique]
+      - name: trap_id
+        tests: [not_null]
+      - name: abandoned
+        description: True when no clarification_applied followed in the session.
+        tests: [not_null]
+      - name: seconds_to_apply
+        description: Null when abandoned.
+
+  - name: fct_refusals
+    description: One row per refused event.
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: reason
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [unanswerable, invalid, uncovered, sql_rejected, too_broad]
+
+  - name: mart_semantic_backlog
+    description: >
+      Phrases that refused or fell to run_sql, counted. Restricted schema:
+      contains question text and SQL from the text family.
+    columns:
+      - name: phrase
+        tests: [not_null]
+      - name: kind
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [refused, ungoverned_sql]
+      - name: occurrences
+        tests: [not_null]
+
+  - name: mart_eval_daily
+    description: >
+      Per tenant and UTC day: question volume, governed share, clarification
+      and abandonment rates, refusal rate overall and by reason, and the
+      log_answer call rate (answer_logged events per session). Rates are null
+      when their denominator is zero.
+    columns:
+      - name: eval_day_id
+        description: tenant and day, for uniqueness.
+        tests: [not_null, unique]
+      - name: tenant
+        tests: [not_null]
+      - name: day
+        tests: [not_null]
+      - name: questions
+        tests: [not_null]
+      - name: governed_share
+        description: governed questions over all questions.
+      - name: clarification_rate
+        description: clarifications returned over questions.
+      - name: abandonment_rate
+        description: abandoned clarifications over clarifications returned.
+      - name: refusal_rate
+        description: refusals over questions; per-reason columns follow.
+      - name: log_answer_rate
+        description: answer_logged events over sessions started that day.
+      - name: capture_rate
+        description: sessions with at least one log_answer call over sessions.

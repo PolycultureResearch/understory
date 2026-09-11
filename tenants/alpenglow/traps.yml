@@ -1,0 +1,38 @@
+version: 1
+
+collisions:
+  - phrase: [revenue, sales, top line]
+    candidates: [net_revenue, gross_revenue]
+    policy: ask
+    hint:
+      net_revenue: "After discounts and refunds. Used in board reporting."
+      gross_revenue: "Before discounts and refunds."
+  - phrase: [margin]
+    candidates: [gross_margin, margin_rate]
+    policy: ask
+    hint:
+      gross_margin: "Dollar margin before discounts."
+      margin_rate: "Gross margin as a share of gross revenue."
+  - phrase: [returns]
+    candidates: [return_rate, returned_units, refunds]
+    policy: ask
+
+dimension_roles:
+  - phrase: [region, west, east, country]
+    candidates: [customer__country, order__country]
+    policy: prefer order__country
+    disclose: "Country is where the order shipped, not where the customer lives."
+
+conventions:
+  - name: time_anchor
+    value: latest_available_date
+    disclose: true
+  - name: default_window
+    value: trailing_30_days
+    policy: ask_if_absent
+
+unanswerable:
+  - phrase: [profit by sku, sku margin, profit by product]
+    reason: "COGS is only available at category grain. Ask for gross margin by category."
+  - phrase: [ltv, lifetime value]
+    reason: "No LTV model yet. Ask about repeat order share instead."

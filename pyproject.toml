@@ -1,0 +1,70 @@
+[project]
+name = "understory"
+version = "0.1.0"
+description = "Natural-language interface for analytics: an MCP server over a dbt semantic layer"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = "MIT"
+authors = [{ name = "Polyculture Research" }]
+dependencies = [
+    "mcp>=2.0.0",
+    "pydantic>=2.7.0",
+    "pyyaml>=6.0",
+    "duckdb>=1.1.0",
+    "pyarrow>=15.0.0",
+    "sqlglot>=25.0.0",
+    "pydantic-ai-slim[openai]>=1.0",
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+# Compiling metric specs with open-source MetricFlow. Needs dbt-core and a
+# warehouse adapter in the process, which is why it is an extra.
+metricflow = [
+    "dbt-metricflow>=0.13.0",
+    "dbt-duckdb>=1.9.0",
+]
+bigquery = [
+    "google-cloud-bigquery>=3.25.0",
+    "google-cloud-storage>=2.18.0",
+    "dbt-bigquery>=1.9.0",
+]
+all = ["understory[metricflow,bigquery]"]
+
+[project.scripts]
+understory = "understory.cli:app"
+
+[dependency-groups]
+dev = [
+    "understory[all]",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/understory"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "metricflow: needs the mf CLI and a dbt project (slow)",
+    "fake_db: needs the fake_companies DuckDB files",
+    "live: calls OpenRouter; needs OPENROUTER_API_KEY",
+    "slow: takes more than a few seconds",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/understory/**/cli.py" = ["B008"]

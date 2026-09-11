@@ -1,0 +1,39 @@
+# Understory log models. Sources are the two Parquet prefixes the server
+# appends to (design section 8.3); marts are the eval and backlog tables in
+# sections 11 and 12. Run locally on DuckDB with profiles.yml in this
+# directory; the BigQuery deployment supplies its own profile and points the
+# `understory_log` source at external tables (see macros/understory_read_parquet.sql).
+
+name: understory
+version: "0.1.0"
+config-version: 2
+
+profile: understory
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Root of the log tree: <understory_log_dir>/<tenant>/{events,text}/dt=.../*.parquet
+  understory_log_dir: "{{ env_var('UNDERSTORY_LOG_DIR', '.understory-log') }}"
+  # Glob over tenants by default; set to one tenant name to model a single log.
+  understory_tenant: "*"
+  # Inactivity gap that starts a new derived session (design section 8.4).
+  understory_session_gap_minutes: 30
+
+models:
+  understory:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
+      restricted:
+        # Marts over the text family. Readable by Polyculture and the
+        # client's named data owner only; grant nothing else on this schema.
+        +schema: restricted

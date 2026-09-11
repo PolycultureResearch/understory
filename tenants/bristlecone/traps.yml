@@ -1,0 +1,41 @@
+version: 1
+
+collisions:
+  - phrase: [revenue, sales, topline, top line]
+    candidates: [wholesale_net_revenue, wholesale_gross_revenue, pos_dollars]
+    policy: prefer wholesale_net_revenue
+    hint:
+      wholesale_net_revenue: "Shipment value net of trade discounts. The topline."
+      wholesale_gross_revenue: "Shipment value at list case prices."
+      pos_dollars: "Consumer retail dollars scanned, weekly grain."
+  - phrase: [units, volume]
+    candidates: [pos_units, shipped_cases]
+    policy: ask
+    hint:
+      pos_units: "Consumer units scanned at retail, weekly."
+      shipped_cases: "Wholesale cases shipped to retailers and distributors."
+  - phrase: [spend]
+    candidates: [marketing_spend, trade_spend]
+    policy: ask
+
+dimension_roles:
+  - phrase: [category]
+    candidates: [shipment__category, scan__category]
+    policy: ask
+  - phrase: [channel]
+    candidates: [shipment__channel_type, scan__channel_type, spend__channel]
+    policy: ask
+
+conventions:
+  - name: time_anchor
+    value: latest_available_date
+    disclose: "Scan data lands weekly; the window ends at the latest complete week, not today."
+  - name: default_window
+    value: trailing_90_days
+    policy: disclose
+
+unanswerable:
+  - phrase: [margin, profit, gross margin]
+    reason: "No COGS in the warehouse. Ask about net revenue or trade spend instead."
+  - phrase: [market share, share of shelf]
+    reason: "No syndicated market data yet."

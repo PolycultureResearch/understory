@@ -1,0 +1,60 @@
+version: 2
+
+models:
+  - name: stg_understory__events
+    description: >
+      Events family with the payload JSON parsed into typed columns. Columns
+      that belong to other event types are null. `ts` is naive UTC.
+    columns:
+      - name: event_id
+        description: uuid4 hex shared with the text record, if any.
+        tests: [not_null, unique]
+      - name: tenant
+        tests: [not_null]
+      - name: user_hash
+        description: HMAC of the connector subject keyed with the tenant secret.
+        tests: [not_null]
+      - name: session_id
+        description: The server's per-connection session id.
+        tests: [not_null]
+      - name: ts
+        description: Event time, UTC.
+        tests: [not_null]
+      - name: log_date
+        description: The dt= partition the file was written under (UTC write date).
+      - name: event
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                - tool_called
+                - clarification_returned
+                - clarification_applied
+                - query_executed
+                - refused
+                - answer_logged
+      - name: governed
+        description: query_executed only. True when the SQL came from the semantic layer.
+      - name: latency_ms
+        description: tool_called and query_executed.
+      - name: trap_id
+        description: clarification events. Trap id from the registry.
+      - name: reason
+        description: refused only.
+      - name: phrase
+        description: refused only. The registry phrase that fired, never user text.
+      - name: payload
+        description: The event-specific fields as JSON, unparsed.
+
+  - name: stg_understory__text
+    description: >
+      Text family. Question, spec, compiled SQL and draft answer keyed by
+      event_id. Lives with the restricted marts in access terms.
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: tenant
+        tests: [not_null]
+      - name: ts
+        tests: [not_null]

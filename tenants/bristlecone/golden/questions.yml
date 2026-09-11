@@ -1,0 +1,151 @@
+# Bristlecone Botanicals (CPG wholesale) golden set.
+#
+# Expected numbers come from the seed-deterministic DuckDB build, rounded to two
+# decimals. Windows are explicit wherever numbers are recorded.
+#
+# Bristlecone is the tenant whose default_window convention discloses rather
+# than asks, so a question with no window resolves and says which window it used.
+version: 1
+
+questions:
+  - id: net_revenue_by_month_q1_2025
+    question: "What was wholesale net revenue by month in the first quarter of 2025?"
+    notes: "Covered question: naming the metric masks the revenue collision."
+    spec:
+      metrics: [wholesale_net_revenue]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [wholesale_net_revenue]
+      numbers: [2285654.64, 1740748.5, 1656224.64]
+
+  - id: volume_collision_march_2025
+    question: "How did volume look in March 2025?"
+    notes: >
+      The tenant's ambiguity that asks: consumer scan units against wholesale
+      cases shipped. They measure different things at different grains.
+    spec:
+      metrics: [shipped_cases]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:units"]
+      answers: {"collision:units": shipped_cases}
+      metrics: [shipped_cases]
+      numbers: [47010]
+
+  - id: topline_prefer_march_2025
+    question: "What was our topline in March 2025?"
+    notes: "'topline' has a prefer policy, so it resolves to net revenue with a disclosure."
+    spec:
+      metrics: [wholesale_gross_revenue]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [wholesale_net_revenue]
+      disclosures: ["net of trade discounts"]
+      numbers: [1656224.64]
+
+  - id: cases_by_category_role
+    question: "What were shipped cases by category in the first quarter of 2025?"
+    notes: >
+      Dimension role with an ask policy: category exists on shipments and on
+      scan data and the two do not line up.
+    spec:
+      metrics: [shipped_cases]
+      group_by: [shipment__category]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["dimension_role:category"]
+      answers: {"dimension_role:category": shipment__category}
+      metrics: [shipped_cases]
+      numbers: [132290, 17980, 12548]
+
+  - id: spend_collision_q1_2025
+    question: "How much did we spend in the first quarter of 2025?"
+    spec:
+      metrics: [marketing_spend]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: ["collision:spend"]
+      answers: {"collision:spend": trade_spend}
+      metrics: [trade_spend]
+      numbers: [32329.59]
+
+  - id: gross_margin_unanswerable
+    question: "What is our gross margin by category?"
+    spec:
+      metrics: [wholesale_net_revenue]
+      group_by: [shipment__category]
+    expected:
+      status: unanswerable
+      disclosures: ["no cogs"]
+
+  - id: market_share_unanswerable
+    question: "What is our market share in the tea category?"
+    spec:
+      metrics: [pos_dollars]
+    expected:
+      status: unanswerable
+      disclosures: ["syndicated market data"]
+
+  - id: cases_by_banner_invalid
+    question: "What were shipped cases by retailer banner in the first quarter of 2025?"
+    notes: "Retailer banner only exists on scan data, so it is invalid for shipments."
+    spec:
+      metrics: [shipped_cases]
+      group_by: [scan__retailer_banner]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: invalid
+
+  - id: cases_no_window
+    question: "How many cases did we ship?"
+    notes: >
+      No window. Unlike the other tenants, bristlecone's default_window
+      discloses instead of asking, so this resolves on the first turn.
+    spec:
+      metrics: [shipped_cases]
+    expected:
+      status: resolved
+      metrics: [shipped_cases]
+      disclosures: ["90 days"]
+      numbers: [116567]
+
+  - id: pos_units_greenfields_h1_2025
+    question: "What were POS units at greenfields between January and June 2025?"
+    notes: "Needs search_dimension_values to learn the retailer banner values."
+    spec:
+      metrics: [pos_units]
+      where:
+        - {dimension: scan__retailer_banner, op: eq, values: [greenfields]}
+      time: {start: 2025-01-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [pos_units]
+      numbers: [561504]
+
+  - id: trade_spend_by_month_q1_2025
+    question: "What was trade spend by month in the first quarter of 2025?"
+    notes: "'trade spend' is a candidate name, so the spend collision is masked out."
+    spec:
+      metrics: [trade_spend]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [trade_spend]
+      numbers: [32329.59]
+
+  - id: avg_case_price_q1_2025
+    question: "What was the realized average price per shipped case in the first quarter of 2025?"
+    spec:
+      metrics: [avg_case_price]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [avg_case_price]
+      numbers: [34.9017]

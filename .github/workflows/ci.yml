@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: understory
+
+      - uses: actions/checkout@v4
+        with:
+          repository: PolycultureResearch/fake_companies
+          path: fake_companies
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Lint
+        working-directory: understory
+        run: |
+          uv sync --all-extras
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+
+      - name: Fast tests
+        working-directory: understory
+        run: uv run pytest -q -m "not fake_db and not metricflow and not slow"
+
+      # The four tenants are the fake_companies verticals. Generating the data
+      # and building the dbt projects takes a few minutes and makes the
+      # DuckDB-backed and MetricFlow-backed tests run for real.
+      - name: Generate fake_companies data
+        working-directory: fake_companies
+        run: |
+          uv sync --extra dbt
+          uv run fake-companies generate --config configs/alpenglow_retail_dtc.yaml --out out/alpenglow.duckdb
+          uv run fake-companies generate --config configs/white_cube_b2c_app.yaml --out out/white_cube.duckdb
+          uv run fake-companies generate --config configs/meridian_b2b_services.yaml --out out/meridian.duckdb
+          uv run fake-companies generate --config configs/bristlecone_cpg.yaml --out out/bristlecone.duckdb
+          for pair in "retail_dtc alpenglow" "b2c_saas white_cube" "b2b_services meridian" "cpg_wholesale bristlecone"; do
+            set -- $pair
+            DBT_PROFILES_DIR=dbt/$1 FAKE_DB=$PWD/out/$2.duckdb uv run dbt build --project-dir dbt/$1 --quiet
+          done
+
+      - name: Full tests
+        working-directory: understory
+        env:
+          FAKE_COMPANIES_DIR: ${{ github.workspace }}/fake_companies
+        run: uv run pytest -q

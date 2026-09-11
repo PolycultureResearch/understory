@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+.understory-log/
+tenants/*/.cache/
+*.duckdb
+*.egg-info/
+.env
+tenants/*/.evals/

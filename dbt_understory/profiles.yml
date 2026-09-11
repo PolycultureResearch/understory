@@ -1,0 +1,10 @@
+# Local DuckDB profile for developing the package. Point UNDERSTORY_LOG_DIR at
+# a log tree written by understory.telemetry and run:
+#   dbt build --project-dir dbt_understory --profiles-dir dbt_understory
+understory:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('UNDERSTORY_DBT_DB', '/tmp/understory_dev.duckdb') }}"
+      threads: 4

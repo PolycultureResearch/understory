@@ -1,0 +1,40 @@
+version: 1
+
+collisions:
+  - phrase: [revenue, sales]
+    candidates: [bookings, invoiced_revenue, collected_cash]
+    policy: ask
+    hint:
+      bookings: "Value of closed-won deals, by close date."
+      invoiced_revenue: "Invoice value issued: upfront at signing, balance at delivery."
+      collected_cash: "Payments actually received."
+  - phrase: [deals, deal count]
+    candidates: [deals_won, closed_deals, leads, open_deals]
+    policy: ask
+  - phrase: [pipeline]
+    candidates: [open_pipeline_value, open_deals]
+    policy: prefer open_pipeline_value
+    hint:
+      open_pipeline_value: "Dollar value of deals open on the day."
+
+dimension_roles:
+  - phrase: [stage]
+    candidates: [deal__stage, stage_event__stage]
+    policy: ask
+  - phrase: [source, lead source, channel]
+    candidates: [deal__source, won_deal__source, stage_event__source]
+    policy: ask
+
+conventions:
+  - name: time_anchor
+    value: latest_available_date
+    disclose: "Dates run through the latest closed deal in the data, not today."
+  - name: default_window
+    value: trailing_90_days
+    policy: ask_if_absent
+
+unanswerable:
+  - phrase: [quota, quota attainment, attainment]
+    reason: "No quota or rep data in the warehouse."
+  - phrase: [forecast, forecasted]
+    reason: "No forecast model. Ask about open pipeline value instead."
