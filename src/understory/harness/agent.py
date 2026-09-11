@@ -13,13 +13,22 @@ have, so the numbers the harness produces are an upper bound.
 Tests drive the same agent with `pydantic_ai.models.test.TestModel` or
 `FunctionModel`, which is why `model` accepts a `Model` instance as well as an
 OpenRouter model id.
+
+Most of an eval's bill is input tokens, because every request in a run re-sends
+the system prompt, the seven tool schemas and whatever get_context returned. The
+fix is prompt caching: `resolve_model` builds a `pydantic_ai.models.openrouter`
+model with cache breakpoints on the instructions, on the tool definitions and on
+the last message of each request. OpenRouter turns those into Anthropic
+`cache_control` blocks, and the profile flags make them a no-op on a model whose
+downstream provider has no explicit cache control.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any
+from decimal import Decimal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -31,6 +40,24 @@ from understory.types import AnswerReview, MetricSpec, Status, ToolResponse
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-5"
 """OpenRouter model id the evals pin by default. Chosen for cost per run."""
+
+CACHE_TTL: Literal["5m", "1h"] = "5m"
+"""Time to live for every cache breakpoint. Anthropic accepts `5m` or `1h`.
+
+Five minutes is the cheap write. A read refreshes the entry, so a sequential
+eval over one tenant keeps the prefix warm from item to item without paying the
+longer write premium.
+"""
+
+USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "requests",
+    "tool_calls",
+)
+"""Integer counters `_usage` lifts off a `RunUsage`, in report order."""
 
 SYSTEM_PROMPT = """\
 You are an analyst for {display_name}. You answer questions about the business
@@ -64,6 +91,10 @@ How to work:
    query. That is how refusals get recorded. If it reports unsourced numbers,
    fix the draft so every number traces to a result, then reply with the
    corrected text.
+10. log_answer is an internal check. Never mention it, its verdict, or any
+   number it flagged in what you say to the user, and never argue with it or
+   explain that you are rephrasing. Your reply is the corrected answer and
+   nothing else.
 
 Be brief. Give the number, the window it covers, and the disclosures. No
 preamble about what you are about to do.
@@ -103,9 +134,14 @@ class Turn(BaseModel):
     clarifications: list[ClarificationAsked] = Field(default_factory=list)
     required_disclosures: list[str] = Field(default_factory=list)
     log_answer: AnswerReview | None = None
-    usage: dict[str, int] = Field(default_factory=dict)
+    usage: dict[str, float] = Field(default_factory=dict)
+    """Token counters, `requests`, `tool_calls` and `cost` in USD. See `_usage`."""
     error: str | None = None
     """Set when the model run itself failed, e.g. a provider error."""
+    error_status: int | None = None
+    """HTTP status of a provider error, when it had one. 402 means out of credits."""
+    messages: list[Any] = Field(default_factory=list, exclude=True)
+    """The run's full message history, to feed the next turn. Never serialized."""
 
     def called(self, name: str) -> bool:
         return any(c.name == name for c in self.tool_calls)
@@ -152,10 +188,27 @@ def resolve_model(model: str | Model, api_key: str | None = None) -> Model:
     """Turn a model id into an OpenRouter-backed model. A `Model` passes through.
 
     Passing a `Model` is how the tests run the whole agent with no API key.
+
+    The settings do two things beyond naming the model. They ask OpenRouter for
+    usage accounting, which is the only way the per-request cost in USD comes
+    back, and they place three cache breakpoints:
+
+    - `openrouter_cache_instructions` caches the system prompt, so the prefix is
+      shared by every request of a run and by every run of the same tenant.
+    - `openrouter_cache_tool_definitions` caches the seven tool schemas, which
+      sit in front of the messages and are identical across runs.
+    - `openrouter_cache_messages` marks the last message of each request, which
+      is what makes the get_context result, and everything after it, a cache
+      read on the next request of the same run and on a second turn that
+      continues the same history.
+
+    That is three of Anthropic's four allowed breakpoints. All three are gated
+    on the resolved model profile, so a model whose downstream provider has no
+    explicit cache control just does not get them.
     """
     if isinstance(model, Model):
         return model
-    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
     from pydantic_ai.providers.openrouter import OpenRouterProvider
 
     key = api_key or os.environ.get("OPENROUTER_API_KEY")
@@ -164,7 +217,13 @@ def resolve_model(model: str | Model, api_key: str | None = None) -> Model:
             "No OpenRouter API key. Set OPENROUTER_API_KEY or pass api_key, or pass a "
             "pydantic_ai Model instance for offline runs."
         )
-    return OpenAIChatModel(model, provider=OpenRouterProvider(api_key=key))
+    settings = OpenRouterModelSettings(
+        openrouter_usage={"include": True},
+        openrouter_cache_instructions=CACHE_TTL,
+        openrouter_cache_tool_definitions=CACHE_TTL,
+        openrouter_cache_messages=CACHE_TTL,
+    )
+    return OpenRouterModel(model, provider=OpenRouterProvider(api_key=key), settings=settings)
 
 
 def model_id(model: str | Model) -> str:
@@ -331,15 +390,23 @@ def run_question(
     api_key: str | None = None,
     session_key: str | None = None,
     clarification_answers: dict[str, str] | None = None,
+    message_history: list[Any] | None = None,
 ) -> Turn:
     """Ask one question and return everything the evals need to score it.
 
-    `clarification_answers` maps trap id to option id. They go into the user
-    prompt so the model can pass them straight back as a `clarifications` entry
-    on its next query_metrics call. That stands in for the human turn in the
-    clarification round trip: the first run of a question asks, and a second run
-    with the answers resolves it. Reuse the same `session_key` across both so
-    the session keeps the results log_answer checks against.
+    `message_history` is the previous turn's `Turn.messages`. Pass it and the
+    question becomes the next user message of the same conversation, so the
+    model keeps the context it already fetched instead of calling get_context
+    again, and the whole prefix is a cache read. That is how the evals answer a
+    clarification.
+
+    `clarification_answers` maps trap id to option id and is the no-history
+    fallback, for the `ask` CLI, which has no previous turn to continue. The
+    answers go into the user prompt so the model can pass them straight back as
+    a `clarifications` entry on its next query_metrics call.
+
+    Reuse the same `session_key` across both turns so the session keeps the
+    results log_answer checks against.
     """
     session = service.sessions.get(session_key or f"harness:{id(service)}")
     trace = Trace()
@@ -356,13 +423,18 @@ def run_question(
 
     answer = ""
     error: str | None = None
-    usage: dict[str, int] = {}
+    error_status: int | None = None
+    usage: dict[str, float] = {}
+    messages: list[Any] = list(message_history or [])
     try:
-        result = agent.run_sync(prompt)
+        result = agent.run_sync(prompt, message_history=message_history or None)
         answer = str(result.output or "")
         usage = _usage(result)
+        messages = list(result.all_messages())
     except Exception as e:  # a provider error is a failed item, not a failed run
         error = f"{type(e).__name__}: {e}"
+        status = getattr(e, "status_code", None)
+        error_status = status if isinstance(status, int) else None
 
     return Turn(
         question=question,
@@ -376,6 +448,8 @@ def run_question(
         log_answer=trace.review,
         usage=usage,
         error=error,
+        error_status=error_status,
+        messages=messages,
     )
 
 
@@ -384,20 +458,60 @@ def run_question(
 # --------------------------------------------------------------------------- #
 
 
-def _usage(result: Any) -> dict[str, int]:
-    try:
-        u = result.usage()
-    except Exception:
+def _usage(result: Any) -> dict[str, float]:
+    """Token counters, request and tool call counts, and cost in USD.
+
+    `AgentRunResult.usage` is a property in pydantic-ai 2.x and was a method
+    before it, which is why this reads it either way. The old code called it,
+    got a `TypeError` because a `RunUsage` is not callable, and swallowed it, so
+    every report carried an empty usage dict.
+
+    Cost comes from OpenRouter's usage accounting, which the model settings turn
+    on. It arrives on each response's `provider_details`, so this sums the
+    responses this run added, not the history it was handed. `RunUsage.cost`, a
+    genai-prices estimate from the token counts, is the fallback.
+    """
+    u = getattr(result, "usage", None)
+    if callable(u):
+        try:
+            u = u()
+        except Exception:
+            return {}
+    if u is None:
         return {}
-    out: dict[str, int] = {}
-    for name in ("input_tokens", "output_tokens", "requests", "tool_calls"):
+
+    out: dict[str, float] = {}
+    for name in USAGE_KEYS:
         value = getattr(u, name, None)
         if isinstance(value, int):
             out[name] = value
     total = out.get("input_tokens", 0) + out.get("output_tokens", 0)
     if total:
         out["total_tokens"] = total
+    cost = _cost(result, u)
+    if cost is not None:
+        out["cost"] = cost
     return out
+
+
+def _cost(result: Any, usage: Any) -> float | None:
+    """USD this run cost, OpenRouter's own number first, the estimate second."""
+    reported = 0.0
+    try:
+        responses = result.new_messages()
+    except Exception:
+        responses = []
+    for message in responses:
+        details = getattr(message, "provider_details", None) or {}
+        value = details.get("cost") if isinstance(details, dict) else None
+        if isinstance(value, int | float | Decimal):
+            reported += float(value)
+    if reported:
+        return reported
+    estimate = getattr(usage, "cost", None)
+    if isinstance(estimate, int | float | Decimal):
+        return float(estimate)
+    return None
 
 
 def _spec_summary(spec: MetricSpec | dict[str, Any]) -> dict[str, Any]:
@@ -424,8 +538,10 @@ def _clip(text: str, n: int) -> str:
 
 
 __all__ = [
+    "CACHE_TTL",
     "DEFAULT_MODEL",
     "SYSTEM_PROMPT",
+    "USAGE_KEYS",
     "ClarificationAsked",
     "ToolCallRecord",
     "Trace",

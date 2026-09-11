@@ -4,6 +4,12 @@
 printed so you can see which tools it reached for and what they said. `eval`
 runs a tenant's golden set, prints the summary table and writes the JSON report
 under `<tenant>/.evals/`.
+
+`eval` spends money, so it reads the key's remaining credit first and refuses a
+set the balance cannot cover, prints the running total after each item, and
+stops at the first out of credits error. `--concurrency` stays at 1 by default
+for the same reason: twelve conversations in flight can drain a balance before
+the first report lands.
 """
 
 from __future__ import annotations
@@ -60,7 +66,7 @@ def ask(
             unsourced = [n.number for n in turn.log_answer.unsourced]
             typer.echo(f"  log_answer: {turn.log_answer.status} unsourced={unsourced}")
         if turn.usage:
-            typer.echo(f"  usage: {turn.usage}")
+            typer.echo(f"  usage: {_usage_line(turn.usage)}")
         typer.echo("---")
     if turn.error:
         typer.echo(f"error: {turn.error}")
@@ -76,13 +82,21 @@ def eval_command(
         False, "--deterministic", help="Run the specs through the service with no model."
     ),
     limit: int = typer.Option(0, "--limit", "-n", help="Only the first N items. 0 means all."),
-    concurrency: int = typer.Option(1, "--concurrency", "-c", help="Items in flight at once."),
+    concurrency: int = typer.Option(
+        1, "--concurrency", "-c", help="Items in flight at once. Keep it at 1 to watch the spend."
+    ),
+    budget_per_item: float = typer.Option(
+        None,
+        "--budget-per-item",
+        help="USD to budget per item when checking the key's remaining credit.",
+    ),
+    force: bool = typer.Option(False, "--force", help="Start even when the credit looks short."),
     write: bool = typer.Option(True, help="Write the JSON report under <tenant>/.evals/."),
 ) -> None:
     """Run a tenant's golden set and print the summary."""
     from understory.harness.agent import DEFAULT_MODEL
     from understory.harness.deterministic import run_deterministic
-    from understory.harness.evals import run_evals, write_report
+    from understory.harness.evals import BUDGET_PER_ITEM, BudgetError, run_evals, write_report
     from understory.harness.golden import load_golden
     from understory.server.service import Service
     from understory.tenant import load_tenant
@@ -101,8 +115,17 @@ def eval_command(
             report = run_deterministic(service, items)
         else:
             report = run_evals(
-                service, items, model=model or DEFAULT_MODEL, concurrency=concurrency
+                service,
+                items,
+                model=model or DEFAULT_MODEL,
+                concurrency=concurrency,
+                budget_per_item=budget_per_item if budget_per_item is not None else BUDGET_PER_ITEM,
+                force=force,
+                echo=typer.echo,
             )
+    except BudgetError as e:
+        typer.echo(f"refusing to start: {e}")
+        raise typer.Exit(2) from e
     finally:
         service.close()
 
@@ -112,6 +135,21 @@ def eval_command(
         typer.echo(f"report: {path}")
     if report.summary()["failures"]:
         raise typer.Exit(1)
+
+
+def _usage_line(usage: dict[str, float]) -> str:
+    """One line of tokens and money, cache reads included so caching is visible."""
+    parts = [
+        f"in={int(usage.get('input_tokens', 0)):,}",
+        f"out={int(usage.get('output_tokens', 0)):,}",
+        f"cache_read={int(usage.get('cache_read_tokens', 0)):,}",
+        f"cache_write={int(usage.get('cache_write_tokens', 0)):,}",
+        f"requests={int(usage.get('requests', 0))}",
+    ]
+    cost = usage.get("cost")
+    if cost:
+        parts.append(f"cost=${cost:.5f} ({cost * 100:.2f}c)")
+    return " ".join(parts)
 
 
 def _parse_answers(pairs: list[str] | None) -> dict[str, str]:
