@@ -94,6 +94,22 @@ class LogConfig(BaseModel):
     enabled: bool = True
 
 
+class AuthConfig(BaseModel):
+    """How a chatbot authenticates to Understory. Separate from warehouse identity.
+
+    `none` is for local development and stdio. `static` accepts a small set of
+    bearer tokens, one per person or per connector, and uses the token's label
+    as the subject that gets hashed into the log. IdP-backed OAuth is a
+    roadmap item; the seam is the MCP SDK's TokenVerifier.
+    """
+
+    mode: Literal["none", "static"] = "none"
+    tokens: dict[str, str] = Field(default_factory=dict)
+    """label -> token. Values usually come from env, e.g. "${UNDERSTORY_TOKEN_DEVON}"."""
+    issuer_url: str = "http://localhost:8000"
+    resource_url: str | None = None
+
+
 class TenantConfig(BaseModel):
     name: str
     display_name: str
@@ -103,6 +119,7 @@ class TenantConfig(BaseModel):
     limits: Limits = Field(default_factory=Limits)
     sql: SqlScope = Field(default_factory=SqlScope)
     log: LogConfig
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     instructions: str | None = None
     """Short text for the MCP server `instructions` field."""
 

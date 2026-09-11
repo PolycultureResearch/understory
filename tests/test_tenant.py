@@ -1,4 +1,4 @@
-from understory.tenant import expand_env, load_tenant, tenants_dir
+from understory.tenant import expand_env, tenants_dir
 from understory.types import MetricSpec, TimeSpec
 
 

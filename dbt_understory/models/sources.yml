@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: understory_log
+    description: >
+      The two Parquet families the Understory server appends to. On DuckDB the
+      staging models read the files directly through understory_read_parquet();
+      on BigQuery this source is bound to external tables over the GCS prefixes
+      and the same macro resolves to it.
+    tables:
+      - name: events
+        description: >
+          One row per telemetry event. No free text: ids, hashes, counts,
+          statuses and latencies only. Readable by the client's analytics team
+          and Polyculture.
+      - name: text
+        description: >
+          Question text, spec, compiled SQL and draft answer keyed by event_id.
+          Readable by Polyculture and the client's named data owner. Retention
+          is a tenant setting, default 90 days.

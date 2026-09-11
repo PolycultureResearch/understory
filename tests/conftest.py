@@ -54,6 +54,10 @@ def pytest_collection_modifyitems(config, items):
         if "metricflow" in item.keywords and not shutil.which("mf"):
             item.add_marker(pytest.mark.skip(reason="mf CLI not on PATH"))
         if "fake_db" in item.keywords:
-            fc = Path(os.environ.get("FAKE_COMPANIES_DIR", "/Users/devon/Documents/code/fake_companies"))
+            fc = Path(
+                os.environ.get("FAKE_COMPANIES_DIR", "/Users/devon/Documents/code/fake_companies")
+            )
             if not (fc / "out" / "alpenglow.duckdb").exists():
-                item.add_marker(pytest.mark.skip(reason="fake_companies DuckDB files not available"))
+                item.add_marker(
+                    pytest.mark.skip(reason="fake_companies DuckDB files not available")
+                )

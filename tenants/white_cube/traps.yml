@@ -1,0 +1,47 @@
+version: 1
+
+collisions:
+  - phrase: [mrr, recurring revenue]
+    candidates: [mrr, new_mrr, net_new_mrr, expansion_mrr, contraction_mrr, churned_mrr]
+    policy: prefer mrr
+    hint:
+      mrr: "Active MRR as of each day. The board number."
+      net_new_mrr: "MRR movement: new plus expansion, less contraction and churn."
+  - phrase: [revenue, sales]
+    candidates: [revenue, mrr]
+    policy: ask
+    hint:
+      revenue: "Cash from succeeded payments, by payment date."
+      mrr: "Active monthly recurring revenue as of each day."
+  - phrase: [churn, cancellations]
+    candidates: [churned_subscriptions, churned_mrr, customer_churn_rate]
+    policy: ask
+  - phrase: [active users, actives]
+    candidates: [dau, wau, paying_active_users]
+    policy: ask
+  - phrase: [conversion, conversions]
+    candidates: [trial_conversion_rate, visit_signup_rate, trial_conversions]
+    policy: ask
+
+dimension_roles:
+  - phrase: [plan, tier]
+    candidates: [subscription_day__plan, mrr_movement__plan, trial__plan]
+    policy: ask
+  - phrase: [country, region, market]
+    candidates: [user__country, trial__country, session__country]
+    policy: prefer user__country
+    disclose: "Country is the user's signup country."
+
+conventions:
+  - name: time_anchor
+    value: latest_available_date
+    disclose: true
+  - name: default_window
+    value: trailing_30_days
+    policy: ask_if_absent
+
+unanswerable:
+  - phrase: [ltv, lifetime value, cac payback]
+    reason: "No LTV or payback model yet. Ask about ARPU and churn rate instead."
+  - phrase: [nps, net promoter]
+    reason: "Survey data is not in the warehouse."
