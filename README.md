@@ -57,7 +57,14 @@ Python 3.13, the official MCP SDK, open-source MetricFlow, DuckDB and BigQuery, 
 
 ## Status
 
-MVP in progress on the `mvp-scaffold` branch. The server, all seven tools, and the telemetry package work end to end against the four fake tenants. Not yet done: the LLM harness and golden-set evals, and a deployment against a real client warehouse.
+MVP on the `mvp-scaffold` branch. The server, all seven tools, the telemetry package, and the harness work end to end against the four fake tenants. The deterministic eval passes every golden item on every tenant, and the live path is verified through OpenRouter. Not yet done: a deployment against a real client warehouse, and connector auth against an identity provider.
+
+```bash
+export OPENROUTER_API_KEY=...
+uv run understory ask --tenant tenants/alpenglow "How were sales in the US in March 2025?"
+uv run understory eval --tenant tenants/alpenglow --deterministic     # no LLM, runs in CI
+uv run understory eval --tenant tenants/alpenglow                     # live, writes tenants/alpenglow/.evals/
+```
 
 ## Related
 
