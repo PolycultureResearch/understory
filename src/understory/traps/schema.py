@@ -2,8 +2,14 @@
 
 The registry holds everything about how to resolve a question that is not a
 metric definition: which phrases collide, which dimension roles collide, which
-conventions to ask about or disclose, and which concepts are declared out of
-scope. See design section 5 for the YAML shape.
+conventions apply, and which concepts are declared out of scope. See design
+section 5 for the YAML shape.
+
+Policies. `prefer <candidate>` is the norm: apply the candidate and disclose it,
+naming the alternatives. `ask` is the exception: stop and return options. Every
+`ask` must carry a `why`, which the registry check enforces, because each ask
+is a friction point the client's data owner has chosen. A missing time window
+is never asked; the `default_window` convention is preferred and disclosed.
 
 Every entry has a stable id. It is either declared with `id:` or derived from
 the entry kind and its first phrase, e.g. `collision:revenue`,
@@ -27,6 +33,7 @@ WINDOWS: dict[str, str] = {
     "trailing_7_days": "Trailing 7 days",
     "trailing_30_days": "Trailing 30 days",
     "trailing_90_days": "Trailing 90 days",
+    "last_week": "Last full week",
     "last_month": "Last full month",
     "last_quarter": "Last full quarter",
     "year_to_date": "Year to date",
@@ -61,8 +68,10 @@ class _ChoiceTrap(_Strict):
     id: str = ""
     phrase: list[str] = Field(min_length=1)
     candidates: list[str] = Field(min_length=1)
-    policy: str = "ask"
-    """`ask` or `prefer <candidate>`."""
+    policy: str
+    """`prefer <candidate>` (the norm) or `ask` (the exception). Always stated."""
+    why: str | None = None
+    """Why this trap asks instead of preferring. Required on `ask` by the registry check."""
     priority: int = 100
     """Lower sorts first when several clarifications fire."""
 
@@ -113,14 +122,29 @@ class DimensionRoleTrap(_ChoiceTrap):
 
 
 class ConventionTrap(_Strict):
-    """A resolution convention with no entity to hang off, such as the time anchor."""
+    """A resolution convention with no entity to hang off, such as the time anchor.
+
+    Conventions only ever `prefer`: the declared value is applied and disclosed.
+    A `default_window` fills a spec that names no dates. A `time_anchor` records
+    that an open `end` runs to the latest date with data.
+    """
 
     name: str
     value: str
     disclose: bool | str = True
     """False for silent, True for generated text, or the text itself."""
-    policy: Literal["ask_if_absent", "disclose"] = "disclose"
+    policy: Literal["prefer"] = "prefer"
     priority: int = 100
+
+    @field_validator("policy", mode="before")
+    @classmethod
+    def _no_asking(cls, value: object) -> object:
+        if value in ("ask", "ask_if_absent", "disclose"):
+            raise ValueError(
+                f"convention policy {value!r} is gone; conventions are always preferred "
+                "and disclosed, so write `policy: prefer` or leave it out"
+            )
+        return value
 
     @property
     def id(self) -> str:

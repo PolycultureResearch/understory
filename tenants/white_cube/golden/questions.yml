@@ -22,8 +22,8 @@ questions:
   - id: revenue_collision_march_2025
     question: "How much revenue did we bring in during March 2025?"
     notes: >
-      The tenant's main collision: cash revenue against MRR. Policy is ask and
-      the second turn picks the payments metric.
+      The tenant's one ask: cash revenue against MRR. The second turn picks the
+      payments metric.
     spec:
       metrics: [revenue]
       time: {start: 2025-03-01, end: 2025-03-31}
@@ -59,28 +59,28 @@ questions:
       disclosures: ["signup country"]
       numbers: [1432, 462, 333]
 
-  - id: churn_collision_q2_2025
+  - id: churn_prefer_q2_2025
     question: "What was our churn in the second quarter of 2025?"
+    notes: "'churn' prefers churned MRR; the disclosure offers subscriptions and the rate."
     spec:
       metrics: [churned_subscriptions]
       time: {start: 2025-04-01, end: 2025-06-30}
     expected:
-      status: needs_clarification
-      clarification_traps: ["collision:churn"]
-      answers: {"collision:churn": churned_mrr}
+      status: resolved
       metrics: [churned_mrr]
+      disclosures: ["churned mrr"]
       numbers: [2545.5]
 
-  - id: active_users_collision_may_2025
+  - id: active_users_prefer_may_2025
     question: "How many active users did we have in May 2025?"
+    notes: "'active users' prefers DAU; the disclosure offers WAU and paying actives."
     spec:
       metrics: [dau]
       time: {start: 2025-05-01, end: 2025-05-31}
     expected:
-      status: needs_clarification
-      clarification_traps: ["collision:active_users"]
-      answers: {"collision:active_users": dau}
+      status: resolved
       metrics: [dau]
+      disclosures: ["dau"]
       numbers: [10388]
 
   - id: ltv_unanswerable
@@ -112,13 +112,11 @@ questions:
 
   - id: signups_no_window
     question: "How many signups have we had?"
-    notes: "No window, and default_window is ask_if_absent, so the server asks first."
+    notes: "No window. The default window is preferred and disclosed, never asked."
     spec:
       metrics: [signups]
     expected:
-      status: needs_clarification
-      clarification_traps: ["convention:default_window"]
-      answers: {"convention:default_window": trailing_30_days}
+      status: resolved
       metrics: [signups]
       disclosures: ["30 days"]
       numbers: [3167]

@@ -220,12 +220,18 @@ class Service:
 
         # 3. Time.
         anchor = self._anchor_for(spec.metrics)
-        window = self._chosen_window(spec)
+        window = self._default_window(spec)
         applied_time = apply_anchor(spec.time, anchor, window)
         spec = spec.model_copy(update={"time": applied_time})
-        window_text = describe_window(applied_time, anchor, window)
-        if window_text and not any("anchored" in d for d in disclosures):
-            disclosures.append(window_text)
+        if window is not None and applied_time.start and applied_time.end:
+            # The traps check already disclosed the default window in words; add the dates.
+            disclosures.append(
+                f"That is {applied_time.start.isoformat()} to {applied_time.end.isoformat()}."
+            )
+        else:
+            window_text = describe_window(applied_time, anchor, window)
+            if window_text and not any("anchored" in d for d in disclosures):
+                disclosures.append(window_text)
 
         # 4. Compile and execute.
         try:
@@ -416,14 +422,12 @@ class Service:
                 )
         return None
 
-    def _chosen_window(self, spec: MetricSpec) -> str | None:
+    def _default_window(self, spec: MetricSpec) -> str | None:
+        """The tenant's default window id when the spec names no dates, else None."""
+        if spec.time.start is not None or spec.time.end is not None:
+            return None
         for trap in self.registry.conventions:
-            if trap.name != "default_window":
-                continue
-            for c in spec.clarifications:
-                if c.trap == trap.id:
-                    return c.choice
-            if trap.policy != "ask_if_absent" and spec.time.start is None and spec.time.end is None:
+            if trap.name == "default_window":
                 return trap.value
         return None
 

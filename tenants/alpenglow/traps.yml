@@ -1,21 +1,30 @@
+# Alpenglow Supply Co. (retail DTC) traps registry.
+#
+# Prefer is the norm. The one ask is margin, because the client reports it two
+# ways and the two have been confused in board decks.
 version: 1
 
 collisions:
   - phrase: [revenue, sales, top line]
     candidates: [net_revenue, gross_revenue]
-    policy: ask
+    policy: prefer net_revenue
     hint:
       net_revenue: "After discounts and refunds. Used in board reporting."
       gross_revenue: "Before discounts and refunds."
   - phrase: [margin]
     candidates: [gross_margin, margin_rate]
     policy: ask
+    why: "Finance reports margin in dollars and marketing in percent, and the two have been confused in board decks."
     hint:
       gross_margin: "Dollar margin before discounts."
       margin_rate: "Gross margin as a share of gross revenue."
   - phrase: [returns]
     candidates: [return_rate, returned_units, refunds]
-    policy: ask
+    policy: prefer return_rate
+    hint:
+      return_rate: "Returned units per unit sold."
+      returned_units: "Count of units returned."
+      refunds: "Refund dollars."
 
 dimension_roles:
   - phrase: [region, west, east, country]
@@ -29,7 +38,7 @@ conventions:
     disclose: true
   - name: default_window
     value: trailing_30_days
-    policy: ask_if_absent
+    policy: prefer
 
 unanswerable:
   - phrase: [profit by sku, sku margin, profit by product]

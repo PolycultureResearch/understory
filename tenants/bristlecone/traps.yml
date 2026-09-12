@@ -1,3 +1,7 @@
+# Bristlecone Botanicals (CPG wholesale) traps registry.
+#
+# Prefer is the norm. The one ask is units, because consumer units scanned and
+# wholesale cases shipped measure different things at different grains.
 version: 1
 
 collisions:
@@ -11,20 +15,26 @@ collisions:
   - phrase: [units, volume]
     candidates: [pos_units, shipped_cases]
     policy: ask
+    why: "Consumer units scanned and wholesale cases shipped differ by an order of magnitude and are reported to different buyers."
     hint:
       pos_units: "Consumer units scanned at retail, weekly."
       shipped_cases: "Wholesale cases shipped to retailers and distributors."
   - phrase: [spend]
-    candidates: [marketing_spend, trade_spend]
-    policy: ask
+    candidates: [trade_spend, marketing_spend]
+    policy: prefer trade_spend
+    hint:
+      trade_spend: "Off-invoice trade promotion discounts granted to retailers."
+      marketing_spend: "Brand advertising spend."
 
 dimension_roles:
   - phrase: [category]
     candidates: [shipment__category, scan__category]
-    policy: ask
+    policy: prefer shipment__category
+    disclose: "Category is the shipment's category, not the category on scan data."
   - phrase: [channel]
     candidates: [shipment__channel_type, scan__channel_type, spend__channel]
-    policy: ask
+    policy: prefer shipment__channel_type
+    disclose: "Channel is the shipment's channel type."
 
 conventions:
   - name: time_anchor
@@ -32,7 +42,7 @@ conventions:
     disclose: "Scan data lands weekly; the window ends at the latest complete week, not today."
   - name: default_window
     value: trailing_90_days
-    policy: disclose
+    policy: prefer
 
 unanswerable:
   - phrase: [margin, profit, gross margin]
