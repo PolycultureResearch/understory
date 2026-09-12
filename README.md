@@ -2,15 +2,16 @@
 
 The natural-language interface for analytics, by [Polyculture Research](https://github.com/PolycultureResearch).
 
-Understory is an MCP server that exposes a client's dbt semantic layer to the chatbot their employees already use (ChatGPT Enterprise, Claude, or a Slack bot). It asks when a question is ambiguous, says "we don't know" when the data can't answer, falls back to labeled SQL when the semantic layer can't, and shows where every number came from. Every question, clarification, refusal, and answer is logged so the semantic layer gets better over time.
+Understory is an MCP server that exposes a client's dbt semantic layer to the chatbot their employees already use (ChatGPT Enterprise, Claude, or a Slack bot). It prefers a declared reading and says so when a question is ambiguous, asks only where the client chose to, says "we don't know" when the data can't answer, falls back to labeled SQL when the semantic layer can't, and shows where every number came from. Every question it could not answer is recorded as a gap, with the SQL that answered instead, so the data team's backlog writes itself.
 
 The billable work at each client is the dbt model and semantic layer. Understory is the reusable part that turns that work into something people can use through chat within days.
 
 ## Design
 
-- [MVP design](docs/understory-mvp-design.md). Tools, the traps registry, semantic layer and warehouse adapters, identity and logging, the eval harness, and the build sequence.
+- [Design](docs/understory-mvp-design.md), draft 0.3. Tools, the traps registry, gaps, semantic layer and warehouse adapters, identity and logging, the two eval sets, and the build sequence.
+- [Glossary](CONTEXT.md). The vocabulary the design and code use. [Decisions](docs/adr/) records the ones that were hard to reverse. [Knowledge](knowledge/) holds dated measurements.
 - [Roadmap](docs/understory-roadmap.md). What comes after the MVP and why it waits, including the Breakdown-based explanation engine for "why did X change" questions.
-- [Architecture draft 0.1](agentic-analytics-architecture.md). The original design. The MVP design supersedes its sections 3 through 8.
+- [Architecture draft 0.1](agentic-analytics-architecture.md). The original design. The design supersedes its sections 3 through 8.
 
 ## Quickstart
 
@@ -49,7 +50,7 @@ dbt_understory/  dbt package modeling the log: fct_questions, fct_sessions, mart
 tenants/         one directory per client; four fake_companies tenants committed
 ```
 
-A tenant is a directory: `tenant.yml`, `context.md`, `traps.yml`, `semantic_manifest.json`, and `golden/questions.yml`.
+A tenant is a directory: `tenant.yml`, `context.md`, `traps.yml`, `semantic_manifest.json`, and `golden/`. The fake tenants here are fixtures; a client's tenant lives in their own dbt repository.
 
 ## Stack
 
