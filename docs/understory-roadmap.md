@@ -1,8 +1,8 @@
 # Understory roadmap
 
-Polyculture Research | September 10, 2026
+Polyculture Research | September 12, 2026
 
-The MVP (`understory-mvp-design.md`) answers descriptive questions through a governed semantic layer, asks when a declared trap fires, falls to labeled SQL when the semantic layer cannot answer, and logs everything for the improvement loop. Everything else from draft 0.1 of the architecture is here, in the order it should be built, with the reason it was deferred and what has to be true before it starts.
+The design (`understory-mvp-design.md`, draft 0.3) answers descriptive questions through a governed semantic layer, prefers and discloses when a declared trap fires, asks only where the client chose to, falls to labeled SQL when the semantic layer cannot answer, and records every uncovered question as a gap. Everything deferred is here, in the order it should be built, with the reason it was deferred and what has to be true before it starts. The design's section 14 holds the near-term build sequence; this document starts after it.
 
 Phases are sequential by default. Items within a phase are independent unless noted.
 
@@ -12,9 +12,9 @@ Goal is to make the MVP trustworthy at two or three clients before adding capabi
 
 ### 1.1 User pins
 
-"When I say revenue I mean net." A pin is a stored clarification choice per `user_hash` and trap. The next question skips the ask and adds a disclosure instead. Pins are the first thing users ask for after the third clarification.
+"When I say margin I mean the rate." A pin is a stored clarification choice per `user_hash` and trap. The next question skips the ask and adds a disclosure instead. With `prefer` as the norm there are few asks left to pin, so pins matter less than draft 0.2 expected, but a user who answers the same ask twice will still want one.
 
-Deferred because pins are the first persistent per-user state and the write-only log design has no read path. Pins need a small mutable store outside the log, keyed by `user_hash`, with an unpin tool. Do this before clarification fatigue shows up in the abandonment numbers.
+Deferred because pins are the first persistent per-user state and the write-only log design has no read path. Pins need a small mutable store outside the log, keyed by `user_hash`, with an unpin tool. Build when the abandonment rate on a tenant's asks says so.
 
 ### 1.2 MCP elicitation
 
@@ -24,9 +24,9 @@ Deferred because support across ChatGPT Enterprise and Claude.ai is uneven and t
 
 ### 1.3 Verified queries
 
-A per-tenant set of saved specs for questions asked often, matched by phrase and returned with a `verified: true` provenance flag. These are the semantic layer's "known good" answers and they turn the top of `mart_semantic_backlog` into a fast path.
+A per-tenant set of saved specs for questions asked often, matched by phrase and returned with a `verified: true` provenance flag. These are the semantic layer's "known good" answers and they turn the most frequent questions into a fast path.
 
-Depends on a few weeks of production logs to know which questions recur.
+Depends on a few weeks of production logs to know which questions recur. It is also the first feature that would need the server to read something derived from its own history at runtime, which the write-only design forbids. The saved specs would have to be promoted into the tenant directory by an analyst, the same way gaps are promoted to golden items, so the server reads config and never the log. Decide that explicitly before building.
 
 ### 1.4 Freshness and test status in provenance
 
@@ -49,6 +49,12 @@ The first live eval cost about 6 cents per question on Claude Sonnet 5, with 80%
 - Stop the redundant `list_metrics` call. In 11 of 47 items the model called it right after `get_context`, which already lists every metric. Say so in the tool description.
 
 These matter more in production than in evals: the client's chatbot pays those tokens, and their employees feel the latency.
+
+### 1.8 Resolved-question candidates
+
+If clarification proves onerous, a tool that takes the user's question and returns one or more fully resolved readings for the user to pick from, instead of a bare list of options. This is the first place Understory would run a model inside a tool call, at our cost through OpenRouter, so it is off by default and a tenant setting.
+
+Triggered by the abandonment rate: asks returned with no resubmission. The metric ships in the design so the trigger is observable before the feature exists. The same mechanism, once built, is the natural home for parsing or summarizing documents the context layer needs.
 
 ## Phase 2: own the conversation where it helps
 
@@ -114,11 +120,15 @@ A third `SemanticLayer` implementation if a maintained open-source compiler from
 
 `explain_change` is the first of a family. Forecasts, anomaly detection (Tremor), and what-if simulation from Breakdown each become a tool with the same provenance and tier rules. Understory stays the interface and the tools stay separate services.
 
-### 4.4 Embedding-based synonym suggestion
+### 4.4 Gap clustering and synonym suggestion
 
-Runs offline over the `text` prefix, proposes synonyms and traps for the weekly review, never gates a query. Draft 0.1 had it right that this is backlog tooling and not runtime.
+Runs offline over the `gaps` family. Groups gap records whose phrasings differ but whose missing entity or SQL is the same, proposes synonyms and traps for the weekly review, and never gates a query. The design keys gaps on what was missing, which is a stable key the data team can act on; clustering sits on top of that key rather than replacing it. Draft 0.1 had it right that this is backlog tooling and not runtime.
 
-### 4.5 Client-run deployment
+### 4.5 Flywheel analytics
+
+Tools over the backlog that tell a data team where to spend the next sprint: gaps by count and distinct users, coverage trend per tenant, time from first gap to closed, and which closed gaps are now answered most. The first version is the dbt marts; a later version is a report the analyst can hand to the client.
+
+### 4.6 Client-run deployment
 
 Same image, client cloud, client secrets. Needs a documented install and a support model. Most of the work is the runbook.
 
@@ -128,13 +138,19 @@ Same image, client cloud, client secrets. Needs a documented install and a suppo
 - Free-text clarification. Choices are option IDs against real entities. Free text goes back through the chatbot as a new question.
 - Understory changing a number. Defaults that change results are metric definitions and belong in dbt.
 - A signed resolution token. Tool ordering is not user involvement, and elicitation (1.2) is the thing that guarantees the user saw the choice.
+- Asking for a time window. A missing window takes the tenant's preferred default and is disclosed.
+- The server reading its own log at runtime. Anything the server needs from its history is promoted into the tenant directory by an analyst first.
+- A model call in the core path. The deterministic path stays free of LLM calls so the cost claim holds by construction. Model calls are optional features (1.5, 1.8, 4.4) that a tenant turns on.
 
 ## Decision points
 
 | When | Decide |
 |---|---|
+| After the first friendly users | Where the gentle guidance lives: trap hints, `prefer` disclosures, or both |
 | After the second client | Whether `run_sql` is exposed to everyone or gated by role |
 | After the first month of production logs | Whether pins (1.1) or verified queries (1.3) come first |
+| When a tenant's abandonment rate is high enough to notice | Whether to build resolved-question candidates (1.8) |
+| When the missing-entity key over-splits or lumps gaps | Whether to build clustering (4.4) |
 | When a client's BYO capture rate is under half | Whether that client moves to the Slack bot |
 | When a client already pays for dbt Cloud | Use `DbtCloud` for that tenant, keep `MetricFlowLocal` as the default |
 | Before Phase 3 | Whether the first tree is built by us or by the client's analyst with Breakdown |
