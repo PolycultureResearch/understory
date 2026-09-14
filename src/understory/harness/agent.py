@@ -79,9 +79,10 @@ How to work:
 5. When query_metrics returns unanswerable or invalid, say plainly that the
    governed data cannot answer it and why. Offer the suggestions. Do not invent
    a number.
-6. Use run_sql only when no governed metric can answer the question. Any answer
-   built on run_sql must say it came from ad hoc SQL rather than governed
-   metrics, and is unverified.
+6. Use run_sql only when no governed metric can answer the question. Pass the
+   user's question and a one-line reason the governed metrics could not answer
+   it. Any answer built on run_sql must say it came from ad hoc SQL, why, and
+   that it is unverified.
 7. State every required_disclosure from the tool result in your answer, in your
    own words but without dropping what it says.
 8. Never state a number that did not come back in a tool result. No estimates,
@@ -334,20 +335,25 @@ def build_agent(
         tr.record("query_metrics", _spec_summary(spec), str(response.status))
         return response.model_dump(mode="json")
 
-    def run_sql(sql: str, question: str | None = None) -> dict[str, Any]:
+    def run_sql(sql: str, question: str, reason: str) -> dict[str, Any]:
         """Escape hatch: one read-only SELECT against the allowed schemas.
 
         Only for questions no governed metric can answer. The result carries
         governed: false, and any answer built on it must say it came from ad hoc
-        SQL and is unverified.
+        SQL, why, and that it is unverified. The question and reason are
+        recorded as a gap for the data team.
 
         Args:
             sql: A single SELECT statement.
-            question: The user's question, for the log.
+            question: The user's question, verbatim.
+            reason: One line on why no governed metric could answer it, e.g.
+                "no promo_code dimension on orders".
         """
-        response = service.run_sql(session, sql, question)
+        response = service.run_sql(session, sql, question, reason)
         tr.absorb(response)
-        tr.record("run_sql", {"sql": _clip(sql, 200)}, str(response.status))
+        tr.record(
+            "run_sql", {"sql": _clip(sql, 200), "reason": _clip(reason, 120)}, str(response.status)
+        )
         return response.model_dump(mode="json")
 
     def log_answer(draft: str) -> dict[str, Any]:

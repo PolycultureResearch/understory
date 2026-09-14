@@ -89,6 +89,9 @@ def _score(service: Service, item: GoldenItem) -> ItemScore:
         if not score.resolution:
             reasons.append(f"got {first.status}: {_why(first)}")
 
+    if asked:
+        score.clarification_resolved = final is not first and final.status == Status.resolved
+
     score.observed_status = str(first.status)
     if final.provenance is not None:
         score.metrics = final.provenance.metrics

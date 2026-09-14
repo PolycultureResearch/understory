@@ -1,4 +1,4 @@
-"""Append-only Parquet writer for the two log families.
+"""Append-only Parquet writer for the three log families.
 
 Write-only by design (design section 8.3). The server's log identity holds
 `objectCreator` on the log prefixes and nothing else, so this module never
@@ -12,10 +12,11 @@ Lifecycle
     writer = TelemetryWriter(tenant_cfg.log, tenant=tenant_cfg.name)
     writer.emit(ToolCalled(...))        # from any thread, sync or async code
     writer.emit_text(TextRecord(...))
+    writer.emit_gap(GapRecord(...))
     writer.close()                      # at shutdown; flushes and joins
 
-`emit` and `emit_text` append to in-memory buffers under a lock and return at
-once. A daemon thread flushes every `flush_interval_s` seconds, or sooner when
+`emit`, `emit_text` and `emit_gap` append to in-memory buffers under a lock
+and return at once. A daemon thread flushes every `flush_interval_s` seconds, or sooner when
 a buffer reaches `max_buffer` records. Each flush writes one Parquet file per
 family that has anything buffered, to
 
@@ -42,7 +43,14 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from understory.telemetry.events import BaseEvent, TextRecord, events_to_table, text_to_table
+from understory.telemetry.events import (
+    BaseEvent,
+    GapRecord,
+    TextRecord,
+    events_to_table,
+    gaps_to_table,
+    text_to_table,
+)
 from understory.tenant import LogConfig
 
 logger = logging.getLogger(__name__)
@@ -133,6 +141,7 @@ class TelemetryWriter:
         self._lock = threading.Lock()
         self._events: list[BaseEvent] = []
         self._text: list[TextRecord] = []
+        self._gaps: list[GapRecord] = []
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._closed = False
@@ -142,6 +151,7 @@ class TelemetryWriter:
             return
         self._events_sink = _make_sink(config.events_prefix)
         self._text_sink = _make_sink(config.text_prefix)
+        self._gaps_sink = _make_sink(config.resolved_gaps_prefix())
         self._thread = threading.Thread(
             target=self._run, name=f"understory-telemetry-{tenant}", daemon=True
         )
@@ -181,6 +191,21 @@ class TelemetryWriter:
         except Exception:
             logger.exception("telemetry: failed to buffer text record")
 
+    def emit_gap(self, record: GapRecord) -> None:
+        """Buffer a gap record for the gaps prefix. Returns immediately; never raises."""
+        if not self.enabled or self._closed:
+            return
+        try:
+            if not record.tenant:
+                record = record.model_copy(update={"tenant": self.tenant})
+            with self._lock:
+                self._gaps.append(record)
+                full = len(self._gaps) >= self.max_buffer
+            if full:
+                self._wake.set()
+        except Exception:
+            logger.exception("telemetry: failed to buffer gap record")
+
     def flush(self) -> None:
         """Write whatever is buffered now, on the calling thread. Never raises."""
         if not self.enabled:
@@ -208,10 +233,10 @@ class TelemetryWriter:
         self.close()
 
     @property
-    def pending(self) -> tuple[int, int]:
-        """(events, text records) currently buffered. For tests and health checks."""
+    def pending(self) -> tuple[int, int, int]:
+        """(events, text records, gap records) buffered. For tests and health checks."""
         with self._lock:
-            return len(self._events), len(self._text)
+            return len(self._events), len(self._text), len(self._gaps)
 
     # ------------------------------------------------------------------ #
     # Background thread
@@ -230,10 +255,13 @@ class TelemetryWriter:
         with self._lock:
             events, self._events = self._events, []
             text, self._text = self._text, []
+            gaps, self._gaps = self._gaps, []
         if events:
             self._write("events", self._events_sink, events_to_table(events), len(events))
         if text:
             self._write("text", self._text_sink, text_to_table(text), len(text))
+        if gaps:
+            self._write("gaps", self._gaps_sink, gaps_to_table(gaps), len(gaps))
 
     def _write(self, family: str, sink: _LocalSink | _GcsSink, table: pa.Table, n: int) -> None:
         relative = self._relative_path()

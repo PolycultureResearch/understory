@@ -47,6 +47,35 @@ models:
       - name: payload
         description: The event-specific fields as JSON, unparsed.
 
+  - name: stg_understory__gaps
+    description: >
+      Gaps family (ADR 0002). One row per question the semantic layer could
+      not answer as governed. Carries question text, reason and SQL but no
+      user identity, so the data team can read it.
+    columns:
+      - name: gap_id
+        description: event_id of the refused or query_executed event the gap came from.
+        tests: [not_null, unique]
+      - name: tenant
+        tests: [not_null]
+      - name: ts
+        tests: [not_null]
+      - name: kind
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [invalid, unanswerable, ungoverned_sql]
+      - name: key
+        description: >
+          What was missing. Entity names for invalid, the registry phrase for
+          unanswerable, the tables touched for ungoverned SQL.
+        tests: [not_null]
+      - name: reason
+        description: The refusal message, or the model's one-line fallback reason.
+      - name: sql
+        description: The ad hoc SQL that answered instead, when one did.
+
   - name: stg_understory__text
     description: >
       Text family. Question, spec, compiled SQL and draft answer keyed by

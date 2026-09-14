@@ -29,7 +29,7 @@ Then, in this repo:
 uv sync --all-extras
 uv run understory check --tenant tenants/alpenglow      # manifest, traps, warehouse, freshness
 uv run understory serve --tenant tenants/alpenglow      # MCP over streamable HTTP at :8000/mcp
-uv run pytest                                            # 197 tests; DuckDB and mf tests skip if data is absent
+uv run pytest                                            # 200 tests; DuckDB and mf tests skip if data is absent
 ```
 
 Point any MCP client at `http://127.0.0.1:8000/mcp`. For a chatbot on the internet, run the container and put it behind HTTPS with `auth.mode: static` in `tenant.yml`.
@@ -44,7 +44,7 @@ src/understory/
   semantic/    SemanticLayer: metricflow_local (mf query --explain + cache), dbt_cloud
   warehouse/   Warehouse: duckdb, bigquery
   guard/       sqlglot read-only SQL guard for run_sql
-  telemetry/   write-only Parquet log in two families, HMAC user hashing
+  telemetry/   write-only Parquet log in three families (events, text, gaps), HMAC user hashing
   harness/     Pydantic AI agent over OpenRouter, golden sets, eval runner
 dbt_understory/  dbt package modeling the log: fct_questions, fct_sessions, mart_eval_daily, ...
 tenants/         one directory per client; four fake_companies tenants committed

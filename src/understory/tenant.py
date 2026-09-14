@@ -89,9 +89,18 @@ class LogConfig(BaseModel):
     """Directory or gs:// prefix for the events family."""
     text_prefix: str
     """Directory or gs:// prefix for the text family."""
+    gaps_prefix: str | None = None
+    """Directory or gs:// prefix for the gaps family. Defaults to `gaps` beside `events`."""
     user_hash_secret: str = "${UNDERSTORY_USER_HASH_SECRET:-dev-secret-change-me}"
     text_retention_days: int = 90
     enabled: bool = True
+
+    def resolved_gaps_prefix(self) -> str:
+        if self.gaps_prefix:
+            return self.gaps_prefix
+        base = self.events_prefix.rstrip("/")
+        head, sep, tail = base.rpartition("/")
+        return f"{head}{sep}gaps" if tail == "events" else f"{base}-gaps"
 
 
 class AuthConfig(BaseModel):

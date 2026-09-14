@@ -1,6 +1,6 @@
 """Telemetry event models and the Parquet schemas they are written with.
 
-Two families, two prefixes, two access levels (design section 8.3).
+Three families, three prefixes, three access levels (design section 8.3).
 
 The events family carries no free text. Metric and dimension ids, trap ids,
 option ids, status names, hashes, counts and latencies only. The `phrase` on a
@@ -51,7 +51,25 @@ Text Parquet schema (at most one row per event)
     sql           string   nullable, compiled or submitted SQL
     draft_answer  string   nullable, the draft passed to log_answer
 
-Files under both prefixes are laid out as `dt=YYYY-MM-DD/<ts>-<uuid>.parquet`.
+Gaps Parquet schema (one row per gap, ADR 0002)
+
+    gap_id     string   the event_id of the refused or query_executed event
+    tenant     string
+    ts         timestamp[us, tz=UTC]
+    kind       string   invalid, unanswerable, or ungoverned_sql
+    key        string   what was missing: entity names, the registry phrase,
+                        or the tables the SQL touched. The backlog groups on it
+    question   string   nullable
+    reason     string   nullable, the refusal message or the model's fallback reason
+    sql        string   nullable, the ad hoc SQL that answered instead
+    phrase     string   nullable, registry phrase for unanswerable
+    spec_json  string   nullable, the spec that was tried
+    payload    string   JSON object: missing, relations, nearest (string lists)
+
+A gap carries no user identity and no session id, so the data team can read
+it. Distinct-user counts are joined from events on gap_id in the warehouse.
+
+Files under every prefix are laid out as `dt=YYYY-MM-DD/<ts>-<uuid>.parquet`.
 The `dt` partition is the UTC date at write time and is meant for retention
 and lifecycle rules; models should use `ts` for event dates.
 """
@@ -67,6 +85,7 @@ import pyarrow as pa
 from pydantic import BaseModel, Field
 
 RefusalReason = Literal["unanswerable", "invalid", "uncovered", "sql_rejected", "too_broad"]
+GapKind = Literal["invalid", "unanswerable", "ungoverned_sql"]
 
 COMMON_FIELDS = frozenset({"event_id", "tenant", "user_hash", "session_id", "ts", "event"})
 
@@ -179,6 +198,34 @@ class TextRecord(BaseModel):
     draft_answer: str | None = None
 
 
+class GapRecord(BaseModel):
+    """A question the semantic layer could not answer as governed. Gaps family only.
+
+    De-identified by construction: no user hash, no session id. `gap_id` is the
+    `event_id` of the refused or query_executed event it came from.
+    """
+
+    gap_id: str
+    tenant: str = ""
+    ts: datetime = Field(default_factory=utcnow)
+    kind: GapKind
+    key: str
+    """What was missing. Entity names for invalid, the registry phrase for
+    unanswerable, the tables touched for ungoverned SQL."""
+    missing: list[str] = Field(default_factory=list)
+    question: str | None = None
+    spec_json: str | None = None
+    reason: str | None = None
+    sql: str | None = None
+    relations: list[str] = Field(default_factory=list)
+    nearest: list[str] = Field(default_factory=list)
+    phrase: str | None = None
+
+    def payload_json(self) -> str:
+        payload = {"missing": self.missing, "relations": self.relations, "nearest": self.nearest}
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
 _TS = pa.timestamp("us", tz="UTC")
 
 EVENTS_SCHEMA = pa.schema(
@@ -208,6 +255,22 @@ TEXT_SCHEMA = pa.schema(
         pa.field("spec_json", pa.string()),
         pa.field("sql", pa.string()),
         pa.field("draft_answer", pa.string()),
+    ]
+)
+
+GAPS_SCHEMA = pa.schema(
+    [
+        pa.field("gap_id", pa.string(), nullable=False),
+        pa.field("tenant", pa.string(), nullable=False),
+        pa.field("ts", _TS, nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("key", pa.string(), nullable=False),
+        pa.field("question", pa.string()),
+        pa.field("reason", pa.string()),
+        pa.field("sql", pa.string()),
+        pa.field("phrase", pa.string()),
+        pa.field("spec_json", pa.string()),
+        pa.field("payload", pa.string(), nullable=False),
     ]
 )
 
@@ -242,6 +305,23 @@ def text_to_table(records: list[TextRecord]) -> pa.Table:
         rows["sql"].append(rec.sql)
         rows["draft_answer"].append(rec.draft_answer)
     return pa.Table.from_pydict(rows, schema=TEXT_SCHEMA)
+
+
+def gaps_to_table(records: list[GapRecord]) -> pa.Table:
+    rows: dict[str, list[Any]] = {name: [] for name in GAPS_SCHEMA.names}
+    for rec in records:
+        rows["gap_id"].append(rec.gap_id)
+        rows["tenant"].append(rec.tenant)
+        rows["ts"].append(_as_utc(rec.ts))
+        rows["kind"].append(rec.kind)
+        rows["key"].append(rec.key)
+        rows["question"].append(rec.question)
+        rows["reason"].append(rec.reason)
+        rows["sql"].append(rec.sql)
+        rows["phrase"].append(rec.phrase)
+        rows["spec_json"].append(rec.spec_json)
+        rows["payload"].append(rec.payload_json())
+    return pa.Table.from_pydict(rows, schema=GAPS_SCHEMA)
 
 
 def _as_utc(ts: datetime) -> datetime:

@@ -121,11 +121,15 @@ def build_server(service: Service) -> MCPServer:
     @mcp.tool(
         description=(
             "Escape hatch: run one read-only SELECT against the allowed schemas when no "
-            "governed metric answers the question. The answer must be labeled as ad hoc SQL."
+            "governed metric answers the question. Pass the user's question and a one-line "
+            "reason the governed metrics could not answer it; both are recorded as a gap for "
+            "the data team. The answer must be labeled as ad hoc SQL and state the reason."
         )
     )
-    async def run_sql(sql: str, ctx: Context, question: str | None = None) -> dict[str, Any]:
-        return service.run_sql(_session(service, ctx), sql, question).model_dump(mode="json")
+    async def run_sql(sql: str, question: str, reason: str, ctx: Context) -> dict[str, Any]:
+        return service.run_sql(_session(service, ctx), sql, question, reason).model_dump(
+            mode="json"
+        )
 
     @mcp.tool(
         description=(

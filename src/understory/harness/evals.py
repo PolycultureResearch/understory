@@ -100,6 +100,9 @@ class ItemScore(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     clarifications: list[str] = Field(default_factory=list)
+    clarification_resolved: bool | None = None
+    """When an ask came back: True if a second turn resolved it, False if it was left
+    there. None when nothing was asked. The eval side of the abandonment rate."""
     answer_text: str = ""
     log_answer_status: str | None = None
     usage: dict[str, float] = Field(default_factory=dict)
@@ -135,6 +138,12 @@ class EvalReport(BaseModel):
             values = [v for v in (getattr(i, name) for i in self.items) if v is not None]
             out[f"{name}_rate"] = _rate(values)
             out[f"{name}_n"] = len(values)
+        asked = [i for i in self.items if i.clarifications]
+        out["asks_returned"] = len(asked)
+        out["asks_resolved"] = sum(1 for i in asked if i.clarification_resolved)
+        out["abandonment_rate"] = (
+            _rate([not i.clarification_resolved for i in asked]) if asked else None
+        )
         out.update(self.usage_summary())
         skipped = [i.id for i in self.items if i.skipped]
         if skipped:
@@ -177,6 +186,7 @@ class EvalReport(BaseModel):
             f" | disclosure {_pct(s['disclosure_rate'])}"
             f" | capture {_pct(s['capture_rate'])}"
             f" | clean {_pct(s['clean_rate'])}"
+            f" | asks {s['asks_returned']}, abandoned {_pct(s['abandonment_rate'])}"
             f" | {s['duration_s']}s\n\n"
         )
         if "input_tokens" in s:
@@ -407,6 +417,9 @@ def _score_agent_item(
         tool_calls=[c.name for c in final.tool_calls],
         metrics=final.metrics_queried,
         clarifications=asked,
+        clarification_resolved=(
+            (final is not first and "resolved" in final.statuses) if asked else None
+        ),
         answer_text=final.answer,
         log_answer_status=final.log_answer.status if final.log_answer else None,
         usage=_merge_usage(first, final),
