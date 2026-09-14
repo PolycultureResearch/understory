@@ -12,6 +12,7 @@ def _result(rows, cols=("metric_time__month", "net_revenue")):
 def test_resolve_windows():
     a = date(2026, 9, 10)
     assert resolve_window("trailing_7_days", a) == (date(2026, 9, 4), a)
+    assert resolve_window("last_week", a) == (date(2026, 8, 31), date(2026, 9, 6))
     assert resolve_window("last_month", a) == (date(2026, 8, 1), date(2026, 8, 31))
     assert resolve_window("last_quarter", a) == (date(2026, 4, 1), date(2026, 6, 30))
     assert resolve_window("year_to_date", a) == (date(2026, 1, 1), a)

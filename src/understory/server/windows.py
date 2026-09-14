@@ -1,10 +1,10 @@
 """Time window resolution.
 
-The chatbot may send explicit start and end dates, a grain, or a window id
-chosen through the `default_window` convention trap. Everything anchors to the
-latest date the data has, never to today. A festival that finished loading
-three days ago should answer "last week" about the week it has, not about a
-week with no rows.
+The chatbot may send explicit start and end dates and a grain. When it sends
+no dates, the tenant's `default_window` convention supplies a window id.
+Everything anchors to the latest date the data has, never to today. A festival
+that finished loading three days ago should answer "last week" about the week
+it has, not about a week with no rows.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ WINDOW_IDS = (
     "trailing_7_days",
     "trailing_30_days",
     "trailing_90_days",
+    "last_week",
     "last_month",
     "last_quarter",
     "year_to_date",
@@ -35,7 +36,8 @@ def resolve_window(window: str, anchor: date) -> tuple[date, date]:
     """Return (start, end) inclusive for a window id anchored at `anchor`.
 
     Trailing windows end on the anchor. Calendar windows are the last complete
-    period before the anchor's period, so "last month" on 2026-09-10 is August.
+    period before the anchor's period, so "last month" on 2026-09-10 is August
+    and "last week" is the Monday-to-Sunday week before the anchor's week.
     """
     if window == "trailing_7_days":
         return anchor - timedelta(days=6), anchor
@@ -43,6 +45,10 @@ def resolve_window(window: str, anchor: date) -> tuple[date, date]:
         return anchor - timedelta(days=29), anchor
     if window == "trailing_90_days":
         return anchor - timedelta(days=89), anchor
+    if window == "last_week":
+        this = anchor - timedelta(days=anchor.weekday())
+        end = this - timedelta(days=1)
+        return end - timedelta(days=6), end
     if window == "last_month":
         this = _month_start(anchor)
         end = this - timedelta(days=1)

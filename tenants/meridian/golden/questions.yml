@@ -20,8 +20,8 @@ questions:
   - id: revenue_collision_q1_2025
     question: "How much revenue did we make in the first quarter of 2025?"
     notes: >
-      The tenant's main collision: bookings against invoiced revenue against
-      collected cash. Three candidates, policy ask.
+      The tenant's one ask: bookings against invoiced revenue against collected
+      cash. Three candidates, each right for somebody.
     spec:
       metrics: [bookings]
       time: {start: 2025-01-01, end: 2025-03-31}
@@ -47,29 +47,28 @@ questions:
   - id: bookings_by_source_role
     question: "What were bookings by source in the first quarter of 2025?"
     notes: >
-      Dimension role with an ask policy: source lives on three different
-      entities and they do not mean the same thing.
+      Dimension role with a prefer policy: source lives on three entities, the
+      won deal's source wins, and the disclosure says so.
     spec:
       metrics: [bookings]
       group_by: [won_deal__source]
       time: {start: 2025-01-01, end: 2025-03-31}
     expected:
-      status: needs_clarification
-      clarification_traps: ["dimension_role:source"]
-      answers: {"dimension_role:source": won_deal__source}
+      status: resolved
       metrics: [bookings]
+      disclosures: ["lead source"]
       numbers: [5160800.0, 2964700.0, 2314600.0, 562200]
 
-  - id: deals_collision_february_2025
+  - id: deals_prefer_february_2025
     question: "How many deals did we close in February 2025?"
+    notes: "'deals' prefers deals won; the disclosure offers closed, leads, and open."
     spec:
       metrics: [deals_won]
       time: {start: 2025-02-01, end: 2025-02-28}
     expected:
-      status: needs_clarification
-      clarification_traps: ["collision:deals"]
-      answers: {"collision:deals": deals_won}
+      status: resolved
       metrics: [deals_won]
+      disclosures: ["deals won"]
       numbers: [92]
 
   - id: quota_unanswerable
@@ -100,15 +99,13 @@ questions:
 
   - id: bookings_no_window
     question: "What were bookings?"
-    notes: "No window, and default_window is ask_if_absent with a 90 day default."
+    notes: "No window. The tenant's 90 day default is preferred and disclosed."
     spec:
       metrics: [bookings]
     expected:
-      status: needs_clarification
-      clarification_traps: ["convention:default_window"]
-      answers: {"convention:default_window": trailing_90_days}
+      status: resolved
       metrics: [bookings]
-      disclosures: ["90 day"]
+      disclosures: ["90 days"]
       numbers: [17040100.0]
 
   - id: bookings_healthcare_q1_2025

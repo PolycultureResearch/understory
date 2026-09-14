@@ -29,7 +29,7 @@ Then, in this repo:
 uv sync --all-extras
 uv run understory check --tenant tenants/alpenglow      # manifest, traps, warehouse, freshness
 uv run understory serve --tenant tenants/alpenglow      # MCP over streamable HTTP at :8000/mcp
-uv run pytest                                            # 170 tests; DuckDB and mf tests skip if data is absent
+uv run pytest                                            # 197 tests; DuckDB and mf tests skip if data is absent
 ```
 
 Point any MCP client at `http://127.0.0.1:8000/mcp`. For a chatbot on the internet, run the container and put it behind HTTPS with `auth.mode: static` in `tenant.yml`.

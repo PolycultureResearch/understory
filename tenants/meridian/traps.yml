@@ -1,29 +1,43 @@
+# Meridian Partners (B2B services) traps registry.
+#
+# Prefer is the norm. The one ask is revenue, because bookings, invoices, and
+# cash land months apart for a services firm and each is the right answer for
+# somebody.
 version: 1
 
 collisions:
   - phrase: [revenue, sales]
     candidates: [bookings, invoiced_revenue, collected_cash]
     policy: ask
+    why: "Bookings, invoices, and cash land months apart for a services firm; the wrong one misstates the quarter."
     hint:
       bookings: "Value of closed-won deals, by close date."
       invoiced_revenue: "Invoice value issued: upfront at signing, balance at delivery."
       collected_cash: "Payments actually received."
   - phrase: [deals, deal count]
     candidates: [deals_won, closed_deals, leads, open_deals]
-    policy: ask
+    policy: prefer deals_won
+    hint:
+      deals_won: "Deals closed won, by close date."
+      closed_deals: "Deals closed either way, won or lost."
+      leads: "Deals created."
+      open_deals: "Deals open on the day."
   - phrase: [pipeline]
     candidates: [open_pipeline_value, open_deals]
     policy: prefer open_pipeline_value
     hint:
       open_pipeline_value: "Dollar value of deals open on the day."
+      open_deals: "Count of deals open on the day."
 
 dimension_roles:
   - phrase: [stage]
     candidates: [deal__stage, stage_event__stage]
-    policy: ask
+    policy: prefer deal__stage
+    disclose: "Stage is the deal's current stage, not the stage it moved through."
   - phrase: [source, lead source, channel]
-    candidates: [deal__source, won_deal__source, stage_event__source]
-    policy: ask
+    candidates: [won_deal__source, deal__source, stage_event__source]
+    policy: prefer won_deal__source
+    disclose: "Source is the lead source of the won deal."
 
 conventions:
   - name: time_anchor
@@ -31,7 +45,7 @@ conventions:
     disclose: "Dates run through the latest closed deal in the data, not today."
   - name: default_window
     value: trailing_90_days
-    policy: ask_if_absent
+    policy: prefer
 
 unanswerable:
   - phrase: [quota, quota attainment, attainment]

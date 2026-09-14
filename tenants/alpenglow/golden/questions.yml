@@ -20,19 +20,19 @@ questions:
       metrics: [net_revenue]
       numbers: [997759.25, 951335.65, 1043396.05]
 
-  - id: sales_collision_march_2025
+  - id: sales_prefer_march_2025
     question: "How were sales in March 2025?"
     notes: >
-      The tenant's main collision. 'sales' maps to both revenue metrics, policy
-      is ask, and the second turn answers net_revenue.
+      The tenant's main collision, with the norm policy. 'sales' maps to both
+      revenue metrics, net_revenue is preferred, and the disclosure names gross
+      revenue as the alternative. One turn.
     spec:
       metrics: [gross_revenue]
       time: {start: 2025-03-01, end: 2025-03-31}
     expected:
-      status: needs_clarification
-      clarification_traps: ["collision:revenue"]
-      answers: {"collision:revenue": net_revenue}
+      status: resolved
       metrics: [net_revenue]
+      disclosures: ["net revenue", "gross revenue"]
       numbers: [1043396.05]
 
   - id: net_revenue_by_country_prefer
@@ -52,6 +52,9 @@ questions:
 
   - id: margin_collision_q2_2025
     question: "What was our margin in the second quarter of 2025?"
+    notes: >
+      The tenant's one ask. Dollar margin and margin rate have been confused in
+      board decks, so the server stops and the second turn picks the rate.
     spec:
       metrics: [gross_margin]
       time: {start: 2025-04-01, end: 2025-06-30}
@@ -62,16 +65,16 @@ questions:
       metrics: [margin_rate]
       numbers: [0.5821]
 
-  - id: returns_collision_april_2025
+  - id: returns_prefer_april_2025
     question: "How did returns look in April 2025?"
+    notes: "'returns' prefers the rate; the disclosure offers returned units and refunds."
     spec:
       metrics: [returned_units]
       time: {start: 2025-04-01, end: 2025-04-30}
     expected:
-      status: needs_clarification
-      clarification_traps: ["collision:returns"]
-      answers: {"collision:returns": return_rate}
+      status: resolved
       metrics: [return_rate]
+      disclosures: ["return rate"]
       numbers: [0.0636]
 
   - id: profit_by_sku_unanswerable
@@ -105,16 +108,14 @@ questions:
   - id: orders_no_window
     question: "How many orders have we had?"
     notes: >
-      No time window at all. default_window has policy ask_if_absent, so the
-      server asks which window before it runs anything.
+      No time window at all. The tenant's default window is preferred and
+      disclosed, never asked, so this resolves on the first turn.
     spec:
       metrics: [orders]
     expected:
-      status: needs_clarification
-      clarification_traps: ["convention:default_window"]
-      answers: {"convention:default_window": trailing_30_days}
+      status: resolved
       metrics: [orders]
-      disclosures: ["30 day"]
+      disclosures: ["30 days"]
       numbers: [15996]
 
   - id: units_hoodies_h1_2025

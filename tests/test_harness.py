@@ -274,19 +274,19 @@ def _scripted_clarification(messages: list[ModelMessage], info: AgentInfo) -> Mo
     are checked against this turn only.
     """
     turn = _turn_messages(messages)
-    answered = any("collision:revenue = net_revenue" in p for p in _prompts(turn))
+    answered = any("collision:margin = margin_rate" in p for p in _prompts(turn))
     history = _returned(messages)
     returned = _returned(turn)
     if "get_context" not in history:
         return ModelResponse(parts=[ToolCallPart("get_context", {})])
     if "query_metrics" not in returned:
         spec: dict[str, Any] = {
-            "metrics": ["gross_revenue"],
-            "time": {"start": "2025-03-01", "end": "2025-03-31"},
-            "question": "How were sales in March 2025?",
+            "metrics": ["gross_margin"],
+            "time": {"start": "2025-04-01", "end": "2025-06-30"},
+            "question": "What was our margin in the second quarter of 2025?",
         }
         if answered:
-            spec["clarifications"] = [{"trap": "collision:revenue", "choice": "net_revenue"}]
+            spec["clarifications"] = [{"trap": "collision:margin", "choice": "margin_rate"}]
         return ModelResponse(parts=[ToolCallPart("query_metrics", {"spec": spec})])
 
     response = returned["query_metrics"]
@@ -296,7 +296,7 @@ def _scripted_clarification(messages: list[ModelMessage], info: AgentInfo) -> Mo
 
     value = next(c for row in response["result"]["rows"] for c in row if isinstance(c, int | float))
     draft = (
-        f"Net revenue in March was {value:,.2f}, read as net revenue because you chose it. "
+        f"Margin rate for the quarter was {value:.4f}, read as margin rate because you chose it. "
         "The window is anchored to the latest available data, not today."
     )
     if "log_answer" not in returned:
@@ -307,7 +307,7 @@ def _scripted_clarification(messages: list[ModelMessage], info: AgentInfo) -> Mo
 @pytest.mark.fake_db
 @pytest.mark.metricflow
 def test_run_evals_scores_a_clarification_item(alpenglow_db):
-    wanted = "sales_collision_march_2025"
+    wanted = "margin_collision_q2_2025"
     items = [i for i in load_golden(alpenglow_db.golden_path) if i.id == wanted]
     assert len(items) == 1
 
@@ -320,9 +320,9 @@ def test_run_evals_scores_a_clarification_item(alpenglow_db):
 
     score = report.items[0]
     assert score.passed, score.reasons
-    assert score.clarifications == ["collision:revenue"]
+    assert score.clarifications == ["collision:margin"]
     assert score.observed_status == "clarified"
-    assert score.metrics == ["net_revenue"]
+    assert score.metrics == ["margin_rate"]
     assert score.capture is True and score.log_answer_status == "pass"
     assert report.summary()["resolution_rate"] == 1.0
 
@@ -337,7 +337,7 @@ def test_run_evals_scores_a_clarification_item(alpenglow_db):
 
     opening = second_turn_requests[0]
     assert _prompts(opening)[0] == items[0].question
-    assert _prompts(opening)[1].startswith("My answers: collision:revenue = net_revenue")
+    assert _prompts(opening)[1].startswith("My answers: collision:margin = margin_rate")
     assert "get_context" in _returned(opening), "the first turn's context was dropped"
     assert len(opening) > len(first_turn_requests[-1]), "no history was carried over"
     assert score.tool_calls == ["query_metrics", "log_answer"]
@@ -578,7 +578,7 @@ def test_live_openrouter(alpenglow_db):
     if not os.environ.get("OPENROUTER_API_KEY"):
         pytest.skip("OPENROUTER_API_KEY not set")
     items = load_golden(alpenglow_db.golden_path)
-    wanted = ("net_revenue_by_month_q1_2025", "sales_collision_march_2025")
+    wanted = ("net_revenue_by_month_q1_2025", "margin_collision_q2_2025")
     chosen = [i for i in items if i.id in wanted]
     assert len(chosen) == 2
 

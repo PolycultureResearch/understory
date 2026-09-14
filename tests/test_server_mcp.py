@@ -42,25 +42,25 @@ async def test_clarification_round_trip(server):
         assert "Alpenglow" in ctx.content[0].text
 
         spec = {
-            "metrics": ["gross_revenue"],
+            "metrics": ["gross_margin"],
             "group_by": ["order__country"],
             "time": {"grain": "quarter", "start": "2025-01-01", "end": "2025-03-31"},
-            "question": "How were sales in the West last quarter?",
+            "question": "What was our margin in the West last quarter?",
         }
         first = _payload(await client.call_tool("query_metrics", {"spec": spec}))
         assert first["status"] == "needs_clarification", first
         trap = first["clarifications"][0]["trap"]
         options = {o["id"] for o in first["clarifications"][0]["options"]}
-        assert {"net_revenue", "gross_revenue"} <= options
+        assert {"gross_margin", "margin_rate"} <= options
 
-        spec["clarifications"] = [{"trap": trap, "choice": "net_revenue"}]
+        spec["clarifications"] = [{"trap": trap, "choice": "margin_rate"}]
         second = _payload(await client.call_tool("query_metrics", {"spec": spec}))
         assert second["status"] == "resolved", second
-        assert second["provenance"]["metrics"] == ["net_revenue"]
+        assert second["provenance"]["metrics"] == ["margin_rate"]
         assert second["result"]["rows"]
 
         value = second["result"]["rows"][0][-1]
         review = _payload(
-            await client.call_tool("log_answer", {"draft": f"Net revenue was {value} there."})
+            await client.call_tool("log_answer", {"draft": f"Margin rate was {value} there."})
         )
         assert review["status"] == "pass", review

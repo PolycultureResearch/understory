@@ -14,6 +14,13 @@ from understory.types import Catalog
 def check_registry(registry: Registry, catalog: Catalog) -> list[str]:
     problems: list[str] = []
 
+    for trap in [*registry.collisions, *registry.dimension_roles]:
+        if trap.is_ask and not (trap.why or "").strip():
+            problems.append(
+                f"{trap.id}: policy is ask with no why. Prefer is the norm; an ask needs "
+                "the reason the data owner signed off on"
+            )
+
     for trap in registry.collisions:
         for c in trap.candidates:
             if c not in catalog.metrics:
@@ -44,8 +51,6 @@ def check_registry(registry: Registry, catalog: Catalog) -> list[str]:
             problems.append(
                 f"{conv.id}: unknown convention; known ones are {', '.join(KNOWN_CONVENTIONS)}"
             )
-        if conv.name == "time_anchor" and conv.policy == "ask_if_absent":
-            problems.append(f"{conv.id}: time_anchor cannot be asked, only disclosed")
         if conv.name == "default_window" and conv.value not in WINDOWS:
             problems.append(
                 f"{conv.id}: value {conv.value!r} is not a known window ({', '.join(WINDOWS)})"

@@ -2,9 +2,6 @@
 #
 # Expected numbers come from the seed-deterministic DuckDB build, rounded to two
 # decimals. Windows are explicit wherever numbers are recorded.
-#
-# Bristlecone is the tenant whose default_window convention discloses rather
-# than asks, so a question with no window resolves and says which window it used.
 version: 1
 
 questions:
@@ -23,8 +20,8 @@ questions:
   - id: volume_collision_march_2025
     question: "How did volume look in March 2025?"
     notes: >
-      The tenant's ambiguity that asks: consumer scan units against wholesale
-      cases shipped. They measure different things at different grains.
+      The tenant's one ask: consumer scan units against wholesale cases
+      shipped. They measure different things at different grains.
     spec:
       metrics: [shipped_cases]
       time: {start: 2025-03-01, end: 2025-03-31}
@@ -50,29 +47,28 @@ questions:
   - id: cases_by_category_role
     question: "What were shipped cases by category in the first quarter of 2025?"
     notes: >
-      Dimension role with an ask policy: category exists on shipments and on
-      scan data and the two do not line up.
+      Dimension role with a prefer policy: category exists on shipments and on
+      scan data, the shipment's wins, and the disclosure says so.
     spec:
       metrics: [shipped_cases]
       group_by: [shipment__category]
       time: {start: 2025-01-01, end: 2025-03-31}
     expected:
-      status: needs_clarification
-      clarification_traps: ["dimension_role:category"]
-      answers: {"dimension_role:category": shipment__category}
+      status: resolved
       metrics: [shipped_cases]
+      disclosures: ["shipment"]
       numbers: [132290, 17980, 12548]
 
-  - id: spend_collision_q1_2025
+  - id: spend_prefer_q1_2025
     question: "How much did we spend in the first quarter of 2025?"
+    notes: "'spend' prefers trade spend; the disclosure offers marketing spend."
     spec:
       metrics: [marketing_spend]
       time: {start: 2025-01-01, end: 2025-03-31}
     expected:
-      status: needs_clarification
-      clarification_traps: ["collision:spend"]
-      answers: {"collision:spend": trade_spend}
+      status: resolved
       metrics: [trade_spend]
+      disclosures: ["trade spend"]
       numbers: [32329.59]
 
   - id: gross_margin_unanswerable
@@ -104,15 +100,13 @@ questions:
 
   - id: cases_no_window
     question: "How many cases did we ship?"
-    notes: >
-      No window. Unlike the other tenants, bristlecone's default_window
-      discloses instead of asking, so this resolves on the first turn.
+    notes: "No window. The tenant's 90 day default is preferred and disclosed."
     spec:
       metrics: [shipped_cases]
     expected:
       status: resolved
       metrics: [shipped_cases]
-      disclosures: ["90 day"]
+      disclosures: ["90 days"]
       numbers: [116567]
 
   - id: pos_units_greenfields_h1_2025

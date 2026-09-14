@@ -5,6 +5,10 @@ the warehouse; it only decides whether the spec can run as written, needs a
 clarification, or must be refused, and it applies `prefer` policies and any
 clarification choices the chatbot sent back.
 
+A `prefer` disclosure teaches as it discloses: it says what the phrase was read
+as, gives that candidate's hint, and names the alternatives so the user can ask
+for them next time without a round trip.
+
 Matching is a normalized whole-phrase match. The question text and every name
 in the spec are lowercased, punctuation and underscores become spaces, and a
 phrase matches only at word boundaries, so `revenue` matches "net revenue" but
@@ -17,11 +21,9 @@ How applied choices are marked: a satisfied `ask` trap and an applied `prefer`
 trap both appear in `TrapsOutcome.fired` and add a `Disclosure` whose `source`
 is the trap id. They never appear in `TrapsOutcome.clarifications`.
 
-Window ids: a `default_window` convention with policy `ask_if_absent` yields a
-clarification of slot `convention` whose option ids are the keys of
-`schema.WINDOWS`. When the chatbot resubmits with a choice for that trap, the
+Windows: a `default_window` convention fires when the spec names no dates. The
 spec's time is left untouched and a disclosure names the window; the server
-translates the window id into dates.
+translates the window id into dates. A window is never asked for.
 """
 
 from __future__ import annotations
@@ -81,6 +83,9 @@ def check(
 
     for convention in registry.conventions:
         _check_convention(convention, spec, fired, clarifications, disclosures)
+    if any(d.source == "convention:default_window" for d in disclosures):
+        # The window sentence already says it ends at the latest date with data.
+        disclosures[:] = [d for d in disclosures if d.source != "convention:time_anchor"]
 
     clarifications.sort(key=lambda c: (c.priority, c.trap))
 
@@ -201,6 +206,31 @@ def _description(name: str, catalog: Catalog) -> str | None:
     return info.description if info is not None else None
 
 
+def _sentence(text: str) -> str:
+    text = text.strip()
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
+def _alternatives(
+    candidates: list[str],
+    applied: str,
+    explicit: set[str],
+    catalog: Catalog,
+    hints: dict[str, str],
+) -> str:
+    """The road not taken: " Ask for X (hint) or Y instead." Empty when there is none."""
+    parts: list[str] = []
+    for c in candidates:
+        if c == applied or c in explicit:
+            continue
+        label = _label(c, catalog)
+        hint = hints.get(c) or _description(c, catalog)
+        parts.append(f"{label} ({hint.strip().rstrip('.')})" if hint else label)
+    if not parts:
+        return ""
+    return " Ask for " + " or ".join(parts) + " instead."
+
+
 # --------------------------------------------------------------------------- #
 # Collisions
 # --------------------------------------------------------------------------- #
@@ -269,7 +299,8 @@ def _check_collision(
     text = f"'{phrase}' is read as {_label(preferred, catalog)}."
     hint = trap.hint.get(preferred) or _description(preferred, catalog)
     if hint:
-        text = f"{text} {hint}"
+        text = f"{text} {_sentence(hint)}"
+    text += _alternatives(trap.candidates, preferred, explicit, catalog, trap.hint)
     disclosures.append(Disclosure(text=text, source=trap.id))
 
 
@@ -347,7 +378,10 @@ def _check_dimension_role(
     preferred = trap.preferred
     assert preferred is not None
     _apply_dimension(spec, trap, preferred)
-    text = trap.disclose or f"'{phrase}' is read as {_label(preferred, catalog)}."
+    text = trap.disclose or (
+        f"'{phrase}' is read as {_label(preferred, catalog)}."
+        + _alternatives(trap.candidates, preferred, set(), catalog, {})
+    )
     disclosures.append(Disclosure(text=text, source=trap.id))
 
 
@@ -390,35 +424,15 @@ def _check_convention(
 
     if spec.time.start is not None or spec.time.end is not None:
         return
-
-    if trap.policy == "ask_if_absent":
-        fired.append(trap.id)
-        choice = _choice_for(spec, trap.id)
-        if trap.name == "default_window" and choice in WINDOWS:
-            disclosures.append(
-                Disclosure(text=f"Time window: {WINDOWS[choice]}, as chosen.", source=trap.id)
-            )
-            return
-        if trap.name == "default_window":
-            options = [Option(id=k, label=v) for k, v in WINDOWS.items()]
-        else:
-            options = [Option(id=trap.value, label=trap.value)]
-        clarifications.append(
-            Clarification(
-                trap=trap.id,
-                slot="convention",
-                phrase=trap.name,
-                options=options,
-                priority=trap.priority,
-            )
-        )
-        return
-
     if not trap.wants_disclosure:
         return
     fired.append(trap.id)
     if trap.name == "default_window":
-        generated = f"No time window was given; using {WINDOWS.get(trap.value, trap.value)}."
+        label = WINDOWS.get(trap.value, trap.value).lower()
+        generated = (
+            f"No time window was given, so this covers the {label} ending at the latest "
+            "date with data, not today. Name a period for a different window."
+        )
     else:
         generated = f"{trap.name}: {trap.value}."
     disclosures.append(Disclosure(text=trap.disclose_text or generated, source=trap.id))
