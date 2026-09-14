@@ -34,6 +34,8 @@ models:
     marts:
       +materialized: table
       restricted:
-        # Marts over the text family. Readable by Polyculture and the
-        # client's named data owner only; grant nothing else on this schema.
+        # Marts over the text family, for the weekly review. Readable by
+        # Polyculture and the client's named data owner only; grant nothing
+        # else on this schema. The backlog is not here: it builds from the
+        # de-identified gaps family so the data team can read it.
         +schema: restricted

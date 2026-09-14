@@ -44,6 +44,18 @@ refusals as (
 
 ),
 
+gaps as (
+
+    select
+        tenant,
+        gap_date as day,
+        count(*) as gaps,
+        sum(case when kind = 'ungoverned_sql' then 1 else 0 end) as gaps_ungoverned_sql
+    from {{ ref('fct_gaps') }}
+    group by 1, 2
+
+),
+
 sessions as (
 
     select
@@ -64,6 +76,8 @@ days as (
     select tenant, day from clarifications
     union
     select tenant, day from refusals
+    union
+    select tenant, day from gaps
     union
     select tenant, day from sessions
 
@@ -97,6 +111,10 @@ select
     cast(r.refused_sql_rejected as double) / nullif(q.questions, 0) as refusal_rate_sql_rejected,
     cast(r.refused_too_broad as double) / nullif(q.questions, 0) as refusal_rate_too_broad,
 
+    coalesce(g.gaps, 0) as gaps,
+    cast(g.gaps as double) / nullif(q.questions, 0) as gap_rate,
+    coalesce(g.gaps_ungoverned_sql, 0) as gaps_ungoverned_sql,
+
     coalesce(s.sessions, 0) as sessions,
     coalesce(s.answer_logged_events, 0) as answer_logged_events,
     cast(s.answer_logged_events as double) / nullif(s.sessions, 0) as log_answer_rate,
@@ -107,4 +125,5 @@ from days as d
 left join questions as q on q.tenant = d.tenant and q.day = d.day
 left join clarifications as c on c.tenant = d.tenant and c.day = d.day
 left join refusals as r on r.tenant = d.tenant and r.day = d.day
+left join gaps as g on g.tenant = d.tenant and g.day = d.day
 left join sessions as s on s.tenant = d.tenant and s.day = d.day

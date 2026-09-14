@@ -157,6 +157,8 @@ class Refusal(BaseModel):
     message: str
     phrase: str | None = None
     suggestions: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    """Metric or dimension names the catalog lacked. The key a gap record groups on."""
 
 
 class TrapsOutcome(BaseModel):

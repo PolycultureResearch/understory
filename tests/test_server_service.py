@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import pytest
 
 from understory.server.service import Service
@@ -20,6 +21,7 @@ def service(alpenglow_db, tmp_path_factory):
     log = LogConfig(
         events_prefix=str(logdir / "events"),
         text_prefix=str(logdir / "text"),
+        gaps_prefix=str(logdir / "gaps"),
         user_hash_secret="test",
     )
     svc = Service(alpenglow_db, telemetry=TelemetryWriter(log, alpenglow_db.name))
@@ -89,16 +91,56 @@ def test_invalid_metric_and_dimension(service, session):
 
 def test_run_sql_paths(service, session):
     r = service.run_sql(
-        session, "select country, count(*) as n from main_marts.fct_orders group by 1"
+        session,
+        "select country, count(*) as n from main_marts.fct_orders group by 1",
+        question="How many orders came from each country?",
+        reason="no orders-by-country metric.",
     )
     assert r.status == Status.resolved, r
     assert r.provenance.governed is False and r.result.rows
-    assert any("ad hoc SQL" in d for d in r.required_disclosures)
+    [disclosure] = [d for d in r.required_disclosures if "ad hoc SQL" in d]
+    assert "because no orders-by-country metric." in disclosure
+    assert "unverified" in disclosure
 
-    r = service.run_sql(session, "delete from main_marts.fct_orders")
+    r = service.run_sql(session, "delete from main_marts.fct_orders", question="q", reason="r")
     assert r.status == Status.sql_rejected
-    r = service.run_sql(session, "select * from shop_db.orders limit 5")
+    r = service.run_sql(session, "select * from shop_db.orders limit 5", question="q", reason="r")
     assert r.status == Status.sql_rejected
+
+
+def test_gaps_recorded_without_identity(service, session):
+    invalid = service.query_metrics(
+        session,
+        {
+            "metrics": ["return_rate"],
+            "group_by": ["order__promo_code"],
+            "question": "What was the return rate for orders that used a promo code?",
+        },
+    )
+    assert invalid.status == Status.invalid
+    assert invalid.refusal.missing == ["order__promo_code"]
+
+    refused = service.query_metrics(
+        session, {"metrics": ["gross_margin"], "question": "What is our profit by SKU?"}
+    )
+    assert refused.status == Status.unanswerable
+
+    service.telemetry.flush()
+    files = list(Path(service.telemetry.config.gaps_prefix).rglob("*.parquet"))
+    assert files
+    rows = [r for f in files for r in pq.read_table(f).to_pylist()]
+    by_kind = {r["kind"]: r for r in rows}
+    assert {"invalid", "unanswerable", "ungoverned_sql"} <= set(by_kind)
+    assert "user_hash" not in rows[0] and "session_id" not in rows[0]
+
+    assert by_kind["invalid"]["key"] == "order__promo_code"
+    assert by_kind["invalid"]["question"].startswith("What was the return rate")
+    assert '"missing":["order__promo_code"]' in by_kind["invalid"]["payload"]
+    assert by_kind["unanswerable"]["key"] == "profit by sku"
+    assert "category" in by_kind["unanswerable"]["reason"]
+    sql_gap = by_kind["ungoverned_sql"]
+    assert "fct_orders" in sql_gap["key"] and sql_gap["reason"] == "no orders-by-country metric"
+    assert sql_gap["sql"].lower().startswith("select country")
 
 
 def test_telemetry_written(service):

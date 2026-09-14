@@ -30,6 +30,7 @@ from understory.telemetry import (
     AnswerLogged,
     ClarificationApplied,
     ClarificationReturned,
+    GapRecord,
     QueryExecuted,
     Refused,
     TelemetryWriter,
@@ -185,7 +186,15 @@ class Service:
         # 1. Validate against the catalog.
         problem = self._validate(spec)
         if problem is not None:
-            return self._refuse(session, t0, "invalid", problem.message, spec, problem.suggestions)
+            return self._refuse(
+                session,
+                t0,
+                "invalid",
+                problem.message,
+                spec,
+                problem.suggestions,
+                missing=problem.missing,
+            )
 
         # 2. Traps.
         outcome = check_traps(
@@ -298,8 +307,15 @@ class Service:
     # Escape hatch
     # ------------------------------------------------------------------ #
 
-    def run_sql(self, session: Session, sql: str, question: str | None = None) -> ToolResponse:
+    def run_sql(self, session: Session, sql: str, question: str, reason: str) -> ToolResponse:
+        """The escape hatch. `question` and `reason` are required: they are the gap record.
+
+        `reason` is the model's one line on why no governed metric answered
+        ("no promo_code dimension on orders"). It reaches the user as a
+        disclosure and the data team as the gap's reason.
+        """
         t0 = time.monotonic()
+        reason = " ".join(reason.split()).rstrip(".") or "no governed metric covers it"
         relations = sorted({r for m in self.catalog.metrics.values() for r in m.relations})
         g = guard_sql(
             sql,
@@ -332,12 +348,23 @@ class Service:
             )
         result_id = session.remember("run_sql", result)
         disclosure = (
-            "This answer came from ad hoc SQL, not from governed metric definitions. "
-            "Treat it as unverified."
+            f"This answer came from ad hoc SQL because {reason}. It is not a governed "
+            "metric and is unverified."
         )
         session.owe([disclosure])
         sql_hash = hashlib.sha256(g.sql.encode()).hexdigest()[:16]
         event_id = uuid.uuid4().hex
+        self._gap(
+            GapRecord(
+                gap_id=event_id,
+                kind="ungoverned_sql",
+                key=",".join(g.relations) or "sql",
+                question=question,
+                reason=reason,
+                sql=g.sql,
+                relations=list(g.relations),
+            )
+        )
         self._emit(
             session,
             QueryExecuted,
@@ -397,6 +424,7 @@ class Service:
                     reason="invalid",
                     message=f"No metric named '{m}'.",
                     suggestions=self.catalog.nearest_metrics(m),
+                    missing=[m],
                 )
         allowed: set[str] | None = None
         for m in spec.metrics:
@@ -419,6 +447,7 @@ class Service:
                         "Valid dimensions are listed by describe_metric."
                     ),
                     suggestions=near or sorted(allowed)[:5],
+                    missing=[d],
                 )
         return None
 
@@ -482,11 +511,30 @@ class Service:
         spec: MetricSpec | None,
         suggestions: list[str] | None = None,
         phrase: str | None = None,
+        missing: list[str] | None = None,
     ) -> ToolResponse:
         event_id = uuid.uuid4().hex
         self._emit(session, Refused, event_id=event_id, reason=reason, phrase=phrase)
         if spec is not None:
             self._text(session, event_id, spec=spec)
+        if reason in ("invalid", "uncovered", "unanswerable"):
+            # A refusal the semantic layer could close is a gap. too_broad and
+            # sql_rejected are not: nothing in dbt would fix them.
+            kind = "unanswerable" if reason == "unanswerable" else "invalid"
+            key = phrase if kind == "unanswerable" else ",".join(missing or []) or "compile"
+            self._gap(
+                GapRecord(
+                    gap_id=event_id,
+                    kind=kind,
+                    key=key or "unanswerable",
+                    missing=list(missing or []),
+                    question=spec.question if spec else None,
+                    spec_json=json.dumps(spec.model_dump(mode="json")) if spec else None,
+                    reason=message,
+                    nearest=list(suggestions or []),
+                    phrase=phrase,
+                )
+            )
         self._tool(session, "query_metrics", reason, t0)
         status = Status(reason) if reason in Status.__members__ else Status.invalid
         return ToolResponse(
@@ -496,9 +544,16 @@ class Service:
                 message=message,
                 phrase=phrase,
                 suggestions=suggestions or [],
+                missing=list(missing or []),
             ),
             how_to_read=HOW_TO_READ_REFUSAL,
         )
+
+    def _gap(self, record: GapRecord) -> None:
+        try:
+            self.telemetry.emit_gap(record.model_copy(update={"tenant": self.tenant.name}))
+        except Exception as e:  # telemetry must never break a tool
+            log.warning("telemetry gap failed: %s", e)
 
     def _emit(self, session: Session, cls: type, **fields: Any) -> None:
         try:

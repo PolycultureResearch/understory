@@ -26,6 +26,7 @@ sql:
 log:
   events_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/alpenglow/events"
   text_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/alpenglow/text"
+  gaps_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/alpenglow/gaps"
   text_retention_days: 90
 
 instructions: >

@@ -16,10 +16,12 @@ import pyarrow.parquet as pq
 
 from understory.telemetry import (
     EVENTS_SCHEMA,
+    GAPS_SCHEMA,
     TEXT_SCHEMA,
     AnswerLogged,
     ClarificationApplied,
     ClarificationReturned,
+    GapRecord,
     QueryExecuted,
     Refused,
     TelemetryWriter,
@@ -38,6 +40,7 @@ def _config(root: Path, tenant: str = "alpenglow", enabled: bool = True) -> LogC
     return LogConfig(
         events_prefix=str(root / tenant / "events"),
         text_prefix=str(root / tenant / "text"),
+        gaps_prefix=str(root / tenant / "gaps"),
         user_hash_secret="test-secret",
         enabled=enabled,
     )
@@ -116,10 +119,10 @@ def test_writer_writes_partitioned_parquet_per_family(tmp_path: Path):
             sql="select 1",
         )
     )
-    assert writer.pending == (6, 1)
+    assert writer.pending == (6, 1, 0)
     writer.close()
     writer.close()  # idempotent
-    assert writer.pending == (0, 0)
+    assert writer.pending == (0, 0, 0)
 
     event_files = _parquet_files(tmp_path / "alpenglow" / "events")
     text_files = _parquet_files(tmp_path / "alpenglow" / "text")
@@ -167,6 +170,41 @@ def test_writer_writes_partitioned_parquet_per_family(tmp_path: Path):
     assert got == [("query_executed", datetime(2026, 3, 4).date(), "abc123")]
 
 
+def test_writer_writes_gaps_family_without_identity(tmp_path: Path):
+    cfg = _config(tmp_path)
+    writer = TelemetryWriter(cfg, "alpenglow", flush_interval_s=3600)
+    writer.emit_gap(
+        GapRecord(
+            gap_id="g1",
+            kind="ungoverned_sql",
+            key="main_marts.fct_orders",
+            question="Return rate for promo orders?",
+            reason="no promo_code dimension on orders",
+            sql="select 1",
+            relations=["main_marts.fct_orders"],
+        )
+    )
+    assert writer.pending == (0, 0, 1)
+    writer.close()
+    [f] = _parquet_files(tmp_path / "alpenglow" / "gaps")
+    table = pq.read_table(f)
+    assert table.schema.equals(GAPS_SCHEMA)
+    assert "user_hash" not in table.column_names and "session_id" not in table.column_names
+    row = table.to_pylist()[0]
+    assert row["tenant"] == "alpenglow" and row["key"] == "main_marts.fct_orders"
+    assert '"relations":["main_marts.fct_orders"]' in row["payload"]
+    assert not (tmp_path / "alpenglow" / "events").exists()
+
+
+def test_gaps_prefix_defaults_beside_events():
+    cfg = LogConfig(events_prefix="/log/t/events", text_prefix="/log/t/text")
+    assert cfg.resolved_gaps_prefix() == "/log/t/gaps"
+    cfg = LogConfig(events_prefix="gs://b/t/events/", text_prefix="gs://b/t/text")
+    assert cfg.resolved_gaps_prefix() == "gs://b/t/gaps"
+    cfg = LogConfig(events_prefix="/log/evt", text_prefix="/log/txt")
+    assert cfg.resolved_gaps_prefix() == "/log/evt-gaps"
+
+
 def test_disabled_writer_writes_nothing(tmp_path: Path):
     cfg = _config(tmp_path, enabled=False)
     writer = TelemetryWriter(cfg, "alpenglow", flush_interval_s=0.01)
@@ -176,7 +214,7 @@ def test_disabled_writer_writes_nothing(tmp_path: Path):
     writer.emit_text(TextRecord(event_id="x", question="secret"))
     writer.flush()
     writer.close()
-    assert writer.pending == (0, 0)
+    assert writer.pending == (0, 0, 0)
     assert not (tmp_path / "alpenglow").exists()
 
 
@@ -222,7 +260,7 @@ def test_write_failure_is_logged_not_raised(tmp_path: Path, caplog):
     with caplog.at_level(logging.ERROR, logger="understory.telemetry.writer"):
         writer.close()
     assert any("dropping 1 events rows" in r.getMessage() for r in caplog.records)
-    assert writer.pending == (0, 0)
+    assert writer.pending == (0, 0, 0)
 
 
 def test_gcs_prefix_uploads_through_mocked_client(tmp_path: Path, monkeypatch):
@@ -290,9 +328,16 @@ def _synthetic_log(root: Path, tenant: str = "alpenglow") -> dict[str, int]:
     bob = user_hash("bob", cfg.user_hash_secret)
     t0 = datetime(2026, 3, 4, 9, 0, tzinfo=UTC)
     writer = TelemetryWriter(cfg, tenant, flush_interval_s=3600, clock=lambda: t0)
-    counts = {"questions": 0, "refusals": 0, "clarifications": 0, "abandoned": 0, "ungoverned": 0}
+    counts = {
+        "questions": 0,
+        "refusals": 0,
+        "clarifications": 0,
+        "abandoned": 0,
+        "ungoverned": 0,
+        "gaps": 0,
+    }
 
-    def question(uh: str, sid: str, ts: datetime, governed: bool, text: str) -> None:
+    def question(uh: str, sid: str, ts: datetime, governed: bool, text: str) -> str:
         ev = QueryExecuted(
             user_hash=uh,
             session_id=sid,
@@ -319,15 +364,19 @@ def _synthetic_log(root: Path, tenant: str = "alpenglow") -> dict[str, int]:
         writer.emit_text(TextRecord(event_id=ev.event_id, ts=ts, question=text, sql="select 1"))
         counts["questions"] += 1
         counts["ungoverned"] += 0 if governed else 1
+        return ev.event_id
 
-    def refusal(
-        uh: str, sid: str, ts: datetime, reason: str, phrase: str | None, text: str
-    ) -> None:
+    def refusal(uh: str, sid: str, ts: datetime, reason: str, phrase: str | None, text: str) -> str:
         ev = Refused(user_hash=uh, session_id=sid, ts=ts, reason=reason, phrase=phrase)
         writer.emit(ev)
         writer.emit_text(TextRecord(event_id=ev.event_id, ts=ts, question=text))
         counts["questions"] += 1
         counts["refusals"] += 1
+        return ev.event_id
+
+    def gap(gap_id: str, ts: datetime, **fields) -> None:
+        writer.emit_gap(GapRecord(gap_id=gap_id, ts=ts, **fields))
+        counts["gaps"] += 1
 
     # Session A (alice): clarification answered, governed question, log_answer.
     a1 = t0
@@ -382,7 +431,7 @@ def _synthetic_log(root: Path, tenant: str = "alpenglow") -> dict[str, int]:
     )
     counts["clarifications"] += 1
     counts["abandoned"] += 1
-    refusal(
+    gid = refusal(
         alice,
         "a2",
         b1 + timedelta(seconds=30),
@@ -390,11 +439,41 @@ def _synthetic_log(root: Path, tenant: str = "alpenglow") -> dict[str, int]:
         "profit",
         "What is our profit by SKU?",
     )
+    gap(
+        gid,
+        b1 + timedelta(seconds=30),
+        kind="unanswerable",
+        key="profit",
+        question="What is our profit by SKU?",
+        reason="COGS is only available at category grain.",
+        phrase="profit",
+    )
 
-    # Session C (bob, next day): run_sql fallback and an invalid refusal.
+    # Session C (bob, next day): an invalid refusal, then the run_sql fallback
+    # that answered it. Both are gaps; the governed question after is not.
     c1 = t0 + timedelta(days=1)
-    refusal(bob, "b1", c1, "invalid", None, "Return rate for promo orders?")
-    question(bob, "b1", c1 + timedelta(seconds=20), False, "Return rate for promo orders?")
+    gid = refusal(bob, "b1", c1, "invalid", None, "Return rate for promo orders?")
+    gap(
+        gid,
+        c1,
+        kind="invalid",
+        key="order__promo_code",
+        missing=["order__promo_code"],
+        question="Return rate for promo orders?",
+        reason="Dimension 'order__promo_code' is not available for return_rate.",
+        nearest=["order__country"],
+    )
+    gid = question(bob, "b1", c1 + timedelta(seconds=20), False, "Return rate for promo orders?")
+    gap(
+        gid,
+        c1 + timedelta(seconds=20),
+        kind="ungoverned_sql",
+        key="main_marts.fct_orders",
+        question="Return rate for promo orders?",
+        reason="no promo_code dimension on orders",
+        sql="select 1",
+        relations=["main_marts.fct_orders"],
+    )
     question(bob, "b1", c1 + timedelta(minutes=5), True, "Net revenue by month")
 
     writer.close()
@@ -456,13 +535,21 @@ def test_dbt_build_models_the_log(tmp_path: Path):
     assert day1[5] == 0.5 and day1[6] == 2 and day1[7] == 0.5
     assert day2[1] == 3 and day2[6] == 1 and day2[7] == 0.0
 
+    # Gaps: one row each, keyed on what was missing, with the asker counted
+    # from events but never named.
+    assert one("select count(*) from main.fct_gaps")[0] == expected["gaps"]
     backlog = con.execute(
-        "select kind, phrase, occurrences from restricted.mart_semantic_backlog "
-        "order by kind, phrase"
+        "select kind, key, occurrences, users, sample_sql from main.mart_semantic_backlog "
+        "order by kind, key"
     ).fetchall()
-    assert ("refused", "profit", 1) in backlog
-    assert ("refused", "return rate for promo orders?", 1) in backlog
-    assert ("ungoverned_sql", "return rate for promo orders?", 1) in backlog
+    assert ("invalid", "order__promo_code", 1, 1, None) in backlog
+    assert ("unanswerable", "profit", 1, 1, None) in backlog
+    assert ("ungoverned_sql", "main_marts.fct_orders", 1, 1, "select 1") in backlog
+    gaps_day2 = one("select gaps, gap_rate from main.mart_eval_daily where day = date '2026-03-05'")
+    assert gaps_day2[0] == 2 and abs(gaps_day2[1] - 2 / 3) < 1e-9
+    gap_cols = {r[0] for r in con.execute("describe main.fct_gaps").fetchall()}
+    assert "user_hash" not in gap_cols
+    assert {"missing", "nearest", "relations"} <= gap_cols
 
     # The events-only side of the warehouse never sees text.
     cols = {r[0] for r in con.execute("describe main.fct_questions").fetchall()}

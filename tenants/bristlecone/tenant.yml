@@ -26,6 +26,7 @@ sql:
 log:
   events_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/bristlecone/events"
   text_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/bristlecone/text"
+  gaps_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/bristlecone/gaps"
   text_retention_days: 90
 
 instructions: >

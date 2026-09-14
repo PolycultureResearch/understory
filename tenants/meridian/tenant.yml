@@ -26,6 +26,7 @@ sql:
 log:
   events_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/meridian/events"
   text_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/meridian/text"
+  gaps_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/meridian/gaps"
   text_retention_days: 90
 
 instructions: >
