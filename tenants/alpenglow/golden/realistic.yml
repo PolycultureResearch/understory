@@ -321,3 +321,20 @@ questions:
       metrics: [orders]
       disclosures: ["order shipped"]
       numbers: [1278.0, 12548.0, 1984.0, 610.0, 275.0, 1566.0, 3186.0, 2252.0, 1025.0, 426.0, 2857.0, 15502.0]
+
+  - id: conversion_rate_by_channel_2024_09
+    question: "Conversion rate by channel for September 2024"
+    kind: over_refusal
+    source: hand
+    notes: >
+      Grouped through the session's own channel. Before fake_companies made
+      the ratio single-model this came back as 1.0 for every channel when
+      grouped through the customer entity, and the item was dropped.
+    spec:
+      metrics: [conversion_rate]
+      group_by: [session__channel]
+      time: {start: 2024-09-01, end: 2024-09-30}
+    expected:
+      status: resolved
+      metrics: [conversion_rate]
+      numbers: [0.0209, 0.0149, 0.0124, 0.0381, 0.0213]
