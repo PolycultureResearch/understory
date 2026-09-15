@@ -364,10 +364,17 @@ def _observe(service: Service, item: GoldenItem) -> Observation:
 
 
 def _metric_numbers(response: ToolResponse, metrics: list[str]) -> list[float]:
-    """The values in the metric columns, in row order, rounded the way the golden files are."""
+    """The values in the metric columns, rounded the way the golden files are.
+
+    Rows are sorted by their non-metric columns (time, then dimensions) first:
+    MetricFlow returns them in no stable order, and a refill that permutes
+    every numbers list would bury the one number that actually changed.
+    """
     if response.result is None:
         return []
     cols = [i for i, c in enumerate(response.result.columns) if c.name in metrics]
+    keys = [i for i in range(len(response.result.columns)) if i not in cols]
+    rows = sorted(response.result.rows, key=lambda r: [str(r[i]) for i in keys])
     if not cols:
         cols = [
             i
@@ -378,7 +385,7 @@ def _metric_numbers(response: ToolResponse, metrics: list[str]) -> list[float]:
             )
         ]
     out: list[float] = []
-    for row in response.result.rows:
+    for row in rows:
         for i in cols:
             v = row[i]
             if v is None or isinstance(v, bool):

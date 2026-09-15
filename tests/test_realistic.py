@@ -303,6 +303,22 @@ def test_patch_expected_edits_in_place_and_keeps_comments(tmp_path):
     assert reloaded[1].expected.numbers == []
 
 
+def test_metric_numbers_are_sorted_by_the_key_columns():
+    from understory.harness.realistic import _metric_numbers
+    from understory.types import ToolResponse
+
+    result = Result(
+        columns=[
+            Column(name="metric_time__month", type="DATE"),
+            Column(name="orders", type="BIGINT"),
+        ],
+        rows=[["2025-03-01", 30], ["2025-01-01", 10], ["2025-02-01", 20]],
+        row_count=3,
+    )
+    response = ToolResponse(status="resolved", result=result)
+    assert _metric_numbers(response, ["orders"]) == [10.0, 20.0, 30.0]
+
+
 def test_observation_defaults():
     obs = Observation(
         id="x", status="resolved", metrics=[], numbers=[], disclosures=[], clarifications=[]
