@@ -5,7 +5,8 @@
       context.md              hand-written business context for get_context
       traps.yml               traps registry (understory.traps)
       semantic_manifest.json  from `dbt parse`, copied in by the deploy
-      golden/questions.yml    eval set (understory.harness)
+      golden/questions.yml    trap set (understory.harness)
+      golden/realistic.yml    realistic set (understory.harness)
 
 Environment variables are expanded in string values with `${VAR}` or
 `${VAR:-default}` so the same tenant.yml works locally and in a container.
@@ -150,6 +151,18 @@ class TenantConfig(BaseModel):
     @property
     def golden_path(self) -> Path:
         return self.root / "golden" / "questions.yml"
+
+    @property
+    def realistic_path(self) -> Path:
+        return self.root / "golden" / "realistic.yml"
+
+    def golden_set_path(self, name: str) -> Path:
+        """`trap` or `realistic`."""
+        if name == "trap":
+            return self.golden_path
+        if name == "realistic":
+            return self.realistic_path
+        raise ValueError(f"unknown golden set {name!r}; expected 'trap' or 'realistic'")
 
 
 def load_tenant(path: str | Path) -> TenantConfig:

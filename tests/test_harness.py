@@ -65,7 +65,7 @@ def test_golden_sets_load(tenants):
     for name in TENANTS:
         cfg = tenants[name]
         items = load_golden(cfg.golden_path)
-        assert 8 <= len(items) <= 12, f"{name}: {len(items)} items"
+        assert 8 <= len(items) <= 14, f"{name}: {len(items)} items"
         trap_ids = set(load_registry(cfg.traps_path).trap_ids())
 
         statuses = {i.expected.status for i in items}

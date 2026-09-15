@@ -5,6 +5,10 @@ printed so you can see which tools it reached for and what they said. `eval`
 runs a tenant's golden set, prints the summary table and writes the JSON report
 under `<tenant>/.evals/`.
 
+`draft-realistic` and `fill` build the realistic set without a model:
+`draft-realistic` writes template questions from the seeded ground truth,
+`fill` runs every spec through the service once and records the numbers it saw.
+
 `eval` spends money, so it reads the key's remaining credit first and refuses a
 set the balance cannot cover, prints the running total after each item, and
 stops at the first out of credits error. `--concurrency` stays at 1 by default
@@ -81,6 +85,9 @@ def eval_command(
     deterministic: bool = typer.Option(
         False, "--deterministic", help="Run the specs through the service with no model."
     ),
+    golden_set: str = typer.Option(
+        "trap", "--set", "-s", help="Which golden set: 'trap' (questions.yml) or 'realistic'."
+    ),
     limit: int = typer.Option(0, "--limit", "-n", help="Only the first N items. 0 means all."),
     concurrency: int = typer.Option(
         1, "--concurrency", "-c", help="Items in flight at once. Keep it at 1 to watch the spend."
@@ -102,9 +109,10 @@ def eval_command(
     from understory.tenant import load_tenant
 
     cfg = load_tenant(tenant)
-    items = load_golden(cfg.golden_path)
+    path = cfg.golden_set_path(golden_set)
+    items = load_golden(path)
     if not items:
-        typer.echo(f"{cfg.name}: no golden questions at {cfg.golden_path}")
+        typer.echo(f"{cfg.name}: no golden questions at {path}")
         raise typer.Exit(1)
     if limit:
         items = items[:limit]
@@ -134,6 +142,94 @@ def eval_command(
         path = write_report(report, cfg.root)
         typer.echo(f"report: {path}")
     if report.summary()["failures"]:
+        raise typer.Exit(1)
+
+
+@app.command("draft-realistic")
+def draft_realistic_command(
+    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    out: Path = typer.Option(
+        None, "--out", "-o", help="Where to write. Default golden/realistic.yml."
+    ),
+    quiet: int = typer.Option(6, "--quiet", help="How many quiet-month items to pad with."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing file."),
+) -> None:
+    """Draft a realistic set from the warehouse's seeded ground truth. No model, no numbers."""
+    from understory.harness.realistic import (
+        data_window,
+        draft_realistic,
+        read_ground_truth,
+        write_items,
+    )
+    from understory.server.service import Service
+    from understory.tenant import load_tenant
+
+    cfg = load_tenant(tenant)
+    target = out or cfg.realistic_path
+    if target.exists() and not overwrite:
+        typer.echo(f"{target} exists; pass --overwrite to replace it")
+        raise typer.Exit(1)
+    service = Service(cfg)
+    try:
+        events = read_ground_truth(service.warehouse)
+        if not events:
+            typer.echo(f"{cfg.name}: no ground truth in the warehouse; nothing to draft from")
+            raise typer.Exit(1)
+        window = data_window(service.catalog, service.warehouse)
+        items = draft_realistic(service.catalog, events, window=window, quiet_items=quiet)
+    finally:
+        service.close()
+    header = (
+        f"{cfg.display_name} realistic set, drafted from meta.ground_truth.\n"
+        "Wording is a template until someone rewrites it. Run `understory fill` to\n"
+        "snapshot the numbers, then hand-check them and set verified where you did."
+    )
+    write_items(target, items, header=header)
+    rate = sum(1 for e in events if e.kind == "rate")
+    typer.echo(f"{cfg.name}: {len(items)} items from {rate} rate events -> {target}")
+
+
+@app.command("fill")
+def fill_command(
+    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    golden_set: str = typer.Option("realistic", "--set", "-s", help="'trap' or 'realistic'."),
+    write: bool = typer.Option(True, help="Write the statuses and numbers back into the file."),
+) -> None:
+    """Run every spec through the service once and record what it returned."""
+    from understory.harness.golden import load_golden
+    from understory.harness.realistic import fill_numbers, patch_expected
+    from understory.server.service import Service
+    from understory.tenant import load_tenant
+
+    cfg = load_tenant(tenant)
+    path = cfg.golden_set_path(golden_set)
+    items = load_golden(path)
+    if not items:
+        typer.echo(f"{cfg.name}: nothing at {path}")
+        raise typer.Exit(1)
+    service = Service(cfg)
+    try:
+        observations = fill_numbers(service, items)
+    finally:
+        service.close()
+    by_id = {item.id: item for item in items}
+    for obs in observations:
+        mark = "MISMATCH " if obs.mismatch else ""
+        typer.echo(f"{obs.id}: {mark}{obs.status} {obs.metrics or ''} {obs.numbers or ''}")
+        for text in obs.disclosures:
+            typer.echo(f"    ~ {text[:200]}")
+        if obs.clarifications:
+            typer.echo(f"    ? {obs.clarifications}")
+        if obs.error:
+            typer.echo(f"    ! {obs.error[:200]}")
+        if obs.mismatch and not obs.error:
+            typer.echo(f"    expected {by_id[obs.id].expected.status}; left unfilled")
+    if write:
+        patch_expected(path, items)
+        typer.echo(f"wrote {path}")
+    mismatched = [o.id for o in observations if o.mismatch]
+    if mismatched:
+        typer.echo(f"{len(mismatched)} items did not do what they expect: {mismatched}")
         raise typer.Exit(1)
 
 

@@ -94,4 +94,9 @@ The hand-written golden questions per tenant that exercise every declared trap a
 _Avoid_: golden set (ambiguous now that there are two)
 
 **Realistic set**:
-Golden questions per tenant weighted toward what stakeholders actually ask, partly generated from seeded ground truth. Its headline number is first-turn answer rate with correct disclosures. Guards adoption.
+Golden questions per tenant weighted toward what stakeholders actually ask, partly generated from seeded ground truth. Its headline number is first-turn answer rate with correct disclosures. Guards adoption. Each item has a kind: `event` (a month the ground truth put something in), `quiet` (a month with nothing), `over_refusal` (answerable but looks risky), later `fault`.
+_Avoid_: adoption set, generated set
+
+**Snapshot**:
+Expected numbers taken by running Understory once, recorded with `verified: false`. Guards regression, not truth; a human sets `verified` after checking against a known report.
+_Avoid_: golden numbers (they are not gold until verified)

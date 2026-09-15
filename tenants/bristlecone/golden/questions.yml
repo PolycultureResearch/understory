@@ -143,3 +143,34 @@ questions:
       status: resolved
       metrics: [avg_case_price]
       numbers: [34.9017]
+
+  - id: scan_sales_whole_earth_2025_q1
+    question: "How did Whole Earth scan sales look in Q1 2025, month by month?"
+    notes: >
+      Prefer bounded by a where clause. 'sales' prefers wholesale net revenue,
+      but the filter is on a retailer banner, which only scan data carries. The
+      spec's POS dollars stay and the disclosure says why.
+    spec:
+      metrics: [pos_dollars]
+      group_by: [metric_time]
+      where:
+        - {dimension: scan__retailer_banner, op: eq, values: [whole_earth]}
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [pos_dollars]
+      disclosures: ["does not carry"]
+      numbers: [530451.29, 510329.06, 423635.44]
+
+  - id: scan_sales_by_banner_2025_q1
+    question: "Scan sales by retailer banner for Q1 2025"
+    notes: "Prefer bounded by a group by: the banner is only on scan data."
+    spec:
+      metrics: [pos_dollars]
+      group_by: [scan__retailer_banner]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [pos_dollars]
+      disclosures: ["group by scan__retailer_banner"]
+      numbers: [2631326.31, 1464415.79, 1020799.85, 1937378.15, 1351534.36]

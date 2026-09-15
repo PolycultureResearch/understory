@@ -255,7 +255,7 @@ A tenant is a directory, and it lives in the client's dbt repository next to the
   traps.yml             # section 5
   semantic_manifest.json  # produced by the dbt deploy, or a path to the dbt project
   golden/
-    traps.yml           # the trap set, section 10
+    questions.yml       # the trap set, section 10
     realistic.yml       # the realistic set, section 10
 ```
 
@@ -324,7 +324,9 @@ The trap set guards correctness. Hand-written items that exercise every declared
 
 The realistic set guards adoption. Items weighted toward what stakeholders actually ask, and its headline number is first-turn answer rate with correct disclosures. It includes an over-refusal class: answerable questions that look risky, so a prompt change that makes the model timid is caught. It is scored on two models per run, the default and a cheap one, so we can publish a floor and a recommended tier.
 
-A golden item records the question, the expected status (`resolved`, `needs_clarification` with which trap, `unanswerable`, `invalid`), the expected spec, expected numbers, expected disclosures, and a `verified` flag saying a human checked the number against a known report.
+A golden item records the question, the expected status (`resolved`, `needs_clarification` with which trap, `unanswerable`, `invalid`), the expected spec, expected numbers, expected disclosures, and a `verified` flag saying a human checked the number against a known report. Realistic items also carry a `kind` (`event`, `quiet`, `over_refusal`, later `fault`) and a `source` naming the ground-truth event or `hand`, so the report can break the headline down by kind and the lineage of a generated question survives its rewrite.
+
+Expected status is the author's judgment of what a correct run does, not a record of what the server did. The `fill` command snapshots numbers only onto items whose run agrees with that judgment; an item that disagrees stays unfilled, carries a note saying why, and fails the deterministic run until the server catches up. That is how the realistic set holds open server work without anyone hand-editing a wrong number in as expected.
 
 ### 10.2 Development on fake_companies
 
@@ -332,7 +334,8 @@ fake_companies gives four verticals (B2C SaaS, retail DTC, B2B services, CPG who
 
 - Four tenants under `tenants/`, one per vertical. Any shared-core change must pass all four.
 - Trap set numbers are exact because the data is seed-deterministic.
-- The realistic set is partly generated from the seeded ground truth: people ask about a month when something happened in it, so questions are drawn from the labeled events and padded with questions that have no event behind them, then hand-edited to sound like a stakeholder. Real question logs from a client, with consent, and rephrased against synthetic entities, are the best source of wording.
+- The realistic set is partly generated from the seeded ground truth: people ask about a month when something happened in it, so questions are drawn from the labeled events and padded with questions that have no event behind them, then hand-edited to sound like a stakeholder. `understory draft-realistic` reads `meta.ground_truth` and writes the templates; `understory fill` snapshots the numbers. Real question logs from a client, with consent, and rephrased against synthetic entities, are the best source of wording.
+- Two things the fake data taught on the first draft (`knowledge/realistic-set-2026-09-14.md`): ratio metrics grouped or filtered through a joined entity come back as 1.0 from the fake semantic layers, a plausible wrong number Understory cannot see; and a `prefer` that swaps a metric or dimension can leave the spec asking for a dimension the preferred candidate lacks. The first is a fake_companies defect and those items were dropped. The second is server work and those items stay in the set, unfilled.
 - Corruption-fault tenants are in the eval matrix. A loading-lag fault should produce a freshness disclosure and a missing-partition fault a "we don't know". These are descriptive answers, not why answers, so they belong here and not in phase 3.
 
 What fake data cannot test: a semantic layer built by someone else, legacy metric names, real phrasing, BigQuery compile latency, connector auth. Those are tested per client, by that client's golden sets.
@@ -430,7 +433,7 @@ Draft 0.2's steps 1 through 6 are built: catalog and discovery, governed query, 
 1. Harness efficiency. Prompt caching, message history across the clarification turn, usage and cost capture, and budget guards are merged. Payload trimming and bounded eval concurrency remain (roadmap 1.7).
 2. Policy flip. `prefer` as the norm, `why` required on `ask` and enforced by the registry check, default window as a preferred tenant setting, the four fake tenants and their trap sets rewritten to match.
 3. Gaps. Required `question` and `reason` on `run_sql`, the fallback disclosure, gap records keyed on what was missing, the `gaps` family, `mart_semantic_backlog` over it, abandonment in the eval report.
-4. Realistic set. Generator from seeded ground truth with hand-edited wording, corruption-fault tenants in the matrix, over-refusal class, BYO mode, two-model scoring.
+4. Realistic set. Generator from seeded ground truth with hand-edited wording, corruption-fault tenants in the matrix, over-refusal class, BYO mode, two-model scoring. Drafted 2026-09-14: 85 items across the four tenants with event, quiet and over-refusal kinds, the drafter and the fill command. Still open: the per-kind report and first-turn answer rate, BYO mode, two-model scoring, fault tenants (which need a volume or freshness check the server does not have), The prefer-versus-where bug the set exposed is fixed and covered by trap-set items; both sets pass deterministically on all four tenants.
 5. Golden authoring. Draft command from catalog and traps, the data-owner interview skill, snapshot approval with the `verified` flag.
 6. External tenant mount. Read a tenant directory from a client repository, docs and README for that layout.
 7. Gap promotion command.

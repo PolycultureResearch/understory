@@ -1,0 +1,323 @@
+# Alpenglow Supply Co. (retail DTC) realistic set.
+#
+# Drafted from meta.ground_truth with `understory draft-realistic`, then
+# rewritten to sound like the people who ask. `source` keeps the lineage.
+# Numbers are a snapshot from `understory fill` (verified: false) until a human
+# checks them against a known report.
+version: 1
+
+questions:
+  # -- event: mobile_checkout_bug, 2024-09-12..23, conversion on paid search fell by half
+  - id: conversion_rate_by_month_2024_09
+    question: "Did our conversion rate dip in September 2024? Show me August through October."
+    kind: event
+    source: ground_truth:mobile_checkout_bug
+    spec:
+      metrics: [conversion_rate]
+      group_by: [metric_time]
+      time: {grain: month, start: 2024-08-01, end: 2024-10-31}
+    expected:
+      status: resolved
+      metrics: [conversion_rate]
+      numbers: [0.0178, 0.0181, 0.0173]
+
+  - id: net_revenue_2024_09
+    question: "How much did we make in September 2024?"
+    kind: event
+    source: ground_truth:mobile_checkout_bug
+    notes: "'make' is not a trap phrase. The model has to pick net revenue on its own."
+    spec:
+      metrics: [net_revenue]
+      time: {start: 2024-09-01, end: 2024-09-30}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      numbers: [627282.15]
+
+  # -- event: jackets_sizing_recall, 2024-10-07..11-10, jacket return rate x2.2
+  - id: returns_by_quarter_h2_2024
+    question: "How did returns look in Q4 2024 compared to Q3?"
+    kind: event
+    source: ground_truth:jackets_sizing_recall
+    notes: "'returns' prefers the rate; the disclosure names the alternatives."
+    spec:
+      metrics: [return_rate]
+      group_by: [metric_time]
+      time: {grain: quarter, start: 2024-07-01, end: 2024-12-31}
+    expected:
+      status: resolved
+      metrics: [return_rate]
+      disclosures: ["return rate", "refunds"]
+      numbers: [0.0626, 0.0567]
+
+  - id: refunds_jackets_by_month_2024_q4
+    question: "Refunds on jackets by month, September through November 2024"
+    kind: event
+    source: ground_truth:jackets_sizing_recall
+    spec:
+      metrics: [refunds]
+      group_by: [metric_time]
+      where:
+        - {dimension: return__category, op: eq, values: [jackets]}
+      time: {grain: month, start: 2024-09-01, end: 2024-11-30}
+    expected:
+      status: resolved
+      metrics: [refunds]
+      numbers: [50449.2, 38453.7, 19311.9]
+
+  - id: refunds_why_2024_10
+    question: "Why were refunds so high in October 2024?"
+    kind: event
+    source: ground_truth:jackets_sizing_recall
+    notes: >
+      A why question. The right first turn shows the refund numbers around the
+      month and says that the cause is not something the data answers. The
+      deterministic check only sees the numbers.
+    spec:
+      metrics: [refunds]
+      group_by: [metric_time]
+      time: {grain: month, start: 2024-09-01, end: 2024-11-30}
+    expected:
+      status: resolved
+      metrics: [refunds]
+      numbers: [93186.85, 75926.5, 51394.1]
+
+  # -- event: paid_social_budget_cut, 2025-02-03..23, paid social spend halved
+  - id: marketing_spend_paid_social_2025_01_02
+    question: "How much did we spend on paid social in February 2025 versus January?"
+    kind: event
+    source: ground_truth:paid_social_budget_cut
+    spec:
+      metrics: [marketing_spend]
+      group_by: [metric_time]
+      where:
+        - {dimension: spend__channel, op: eq, values: [paid_social]}
+      time: {grain: month, start: 2025-01-01, end: 2025-02-28}
+    expected:
+      status: resolved
+      metrics: [marketing_spend]
+      numbers: [62959.78, 34721.45]
+
+  - id: sales_by_month_2025_q1
+    question: "Did sales drop in February 2025?"
+    kind: event
+    source: ground_truth:paid_social_budget_cut
+    notes: "'sales' prefers net revenue. A month either side gives the comparison."
+    spec:
+      metrics: [net_revenue]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["net revenue", "gross revenue"]
+      numbers: [1043396.05, 951335.65, 997759.25]
+
+  - id: sessions_by_channel_2025_02
+    question: "Sessions by channel for February 2025"
+    kind: event
+    source: ground_truth:paid_social_budget_cut
+    spec:
+      metrics: [sessions]
+      group_by: [session__channel]
+      time: {start: 2025-02-01, end: 2025-02-28}
+    expected:
+      status: resolved
+      metrics: [sessions]
+      numbers: [69213.0, 20975.0, 32136.0, 46415.0, 25399.0]
+
+  # -- event: surprise items-per-order shift, 2025-04-07..18
+  - id: aov_2025_03_04
+    question: "What was our AOV in April 2025 compared to March?"
+    kind: event
+    source: ground_truth:surprise_rate_level_shift_2025-04-07
+    spec:
+      metrics: [aov]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-03-01, end: 2025-04-30}
+    expected:
+      status: resolved
+      metrics: [aov]
+      numbers: [142.05, 119.29]
+
+  # -- event: tees_demand_slump, 2025-05-05..18
+  - id: units_tees_2025_05
+    question: "How many tees did we sell in May 2025?"
+    kind: event
+    source: ground_truth:tees_demand_slump
+    spec:
+      metrics: [units]
+      where:
+        - {dimension: order_item__category, op: eq, values: [tees]}
+      time: {start: 2025-05-01, end: 2025-05-31}
+    expected:
+      status: resolved
+      metrics: [units]
+      numbers: [3592.0]
+
+  - id: units_by_category_2025_05
+    question: "Units by category for May 2025"
+    kind: event
+    source: ground_truth:tees_demand_slump
+    spec:
+      metrics: [units]
+      group_by: [order_item__category]
+      time: {start: 2025-05-01, end: 2025-05-31}
+    expected:
+      status: resolved
+      metrics: [units]
+      numbers: [3592.0, 2068.0, 2194.0, 1604.0, 2681.0, 1897.0, 2461.0]
+
+  # -- event: surprise shorts spike, 2025-12-25..26
+  - id: top_line_2025_12
+    question: "What did the top line look like in December 2025?"
+    kind: event
+    source: ground_truth:surprise_rate_spike_2025-12-25
+    notes: "'top line' prefers net revenue."
+    spec:
+      metrics: [net_revenue]
+      time: {start: 2025-12-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["net revenue"]
+      numbers: [2061364.43]
+
+  # -- quiet months
+  - id: orders_2024_07
+    question: "How many orders did we get in July 2024?"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [orders]
+      time: {start: 2024-07-01, end: 2024-07-31}
+    expected:
+      status: resolved
+      metrics: [orders]
+      numbers: [3172.0]
+
+  - id: new_customers_by_first_channel_2025_q3
+    question: "New customers by first channel for Q3 2025"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [new_customers]
+      group_by: [customer__first_channel]
+      time: {start: 2025-07-01, end: 2025-09-30}
+    expected:
+      status: resolved
+      metrics: [new_customers]
+      numbers: [1697.0, 3716.0, 2535.0, 2804.0, 2845.0]
+
+  - id: repeat_order_share_2025_h2
+    question: "What's our repeat order share for the second half of 2025?"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [repeat_order_share]
+      time: {start: 2025-07-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [repeat_order_share]
+      numbers: [0.5742]
+
+  - id: avg_fulfillment_days_2025_08
+    question: "How long did fulfillment take on average in August 2025?"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [avg_fulfillment_days]
+      time: {start: 2025-08-01, end: 2025-08-31}
+    expected:
+      status: resolved
+      metrics: [avg_fulfillment_days]
+      numbers: [4.98]
+
+  - id: payment_failures_2025_11
+    question: "How many payments failed in November 2025?"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [payment_failures]
+      time: {start: 2025-11-01, end: 2025-11-30}
+    expected:
+      status: resolved
+      metrics: [payment_failures]
+      numbers: [306.0]
+
+  # -- over-refusal: answerable questions that look like a trap
+  - id: gross_revenue_explicit_2025_03
+    question: "What was gross revenue, not net, in March 2025?"
+    kind: over_refusal
+    source: hand
+    notes: >
+      Names the non-preferred candidate. The revenue collision must leave it
+      alone rather than swap in net revenue.
+    spec:
+      metrics: [gross_revenue]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [gross_revenue]
+      numbers: [1130461.9]
+
+  - id: gross_margin_by_category_2025_q2
+    question: "Gross margin by category for Q2 2025"
+    kind: over_refusal
+    source: hand
+    notes: >
+      Sits next to two traps: 'margin' is the tenant's ask and 'profit by sku'
+      is unanswerable. Gross margin is named, category grain exists, so it
+      resolves in one turn.
+    spec:
+      metrics: [gross_margin]
+      group_by: [order_item__category]
+      time: {start: 2025-04-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [gross_margin]
+      numbers: [374803.42, 620531.24, 260168.62, 124623.81, 77798.62, 390740.83, 160251.23]
+
+  - id: net_revenue_by_country_2025
+    question: "Which country brought in the most net revenue in 2025?"
+    kind: over_refusal
+    source: hand
+    notes: "A ranking sounds like analysis; it is a group by. Country prefers the order's country."
+    spec:
+      metrics: [net_revenue]
+      group_by: [order__country]
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["order shipped"]
+      numbers: [11609477.53, 1467850.52, 992415.15, 2099684.8]
+
+  - id: new_customers_paid_search_2025_q1
+    question: "How many first-time buyers did we get from paid search in Q1 2025?"
+    kind: over_refusal
+    source: hand
+    spec:
+      metrics: [new_customers]
+      where:
+        - {dimension: customer__first_channel, op: eq, values: [paid_search]}
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [new_customers]
+      numbers: [2350.0]
+
+  - id: orders_by_device_and_country_2025_q4
+    question: "Can you break orders down by device and country for Q4 2025?"
+    kind: over_refusal
+    source: hand
+    notes: "Two group-bys. Country is a role trap, so the disclosure still fires."
+    spec:
+      metrics: [orders]
+      group_by: [order__device, order__country]
+      time: {start: 2025-10-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [orders]
+      disclosures: ["order shipped"]
+      numbers: [1278.0, 12548.0, 1984.0, 610.0, 275.0, 1566.0, 3186.0, 2252.0, 1025.0, 426.0, 2857.0, 15502.0]

@@ -1,0 +1,376 @@
+# White Cube (B2C SaaS) realistic set.
+#
+# Drafted from meta.ground_truth with `understory draft-realistic`, then
+# rewritten to sound like the people who ask. `source` keeps the lineage.
+# Numbers are a snapshot from `understory fill` (verified: false) until a human
+# checks them against a known report.
+version: 1
+
+questions:
+  # -- event: surprise paid search ramp, 2024-09-21..29
+  - id: marketing_spend_by_channel_2024_09
+    question: "Marketing spend by channel for September 2024"
+    kind: event
+    source: ground_truth:surprise_rate_ramp_2024-09-21
+    spec:
+      metrics: [marketing_spend]
+      group_by: [spend__channel]
+      time: {start: 2024-09-01, end: 2024-09-30}
+    expected:
+      status: resolved
+      metrics: [marketing_spend]
+      numbers: [8169.03, 10094.32, 1468.81]
+
+  # -- event: surprise direct-convert shift, 2024-10-16..11-07
+  - id: direct_conversions_2024_09_10
+    question: "How many direct conversions did we get in October 2024 versus September?"
+    kind: event
+    source: ground_truth:surprise_rate_level_shift_2024-10-16
+    notes: "'direct conversions' is a label, so the conversion collision is masked."
+    spec:
+      metrics: [direct_conversions]
+      group_by: [metric_time]
+      time: {grain: month, start: 2024-09-01, end: 2024-10-31}
+    expected:
+      status: resolved
+      metrics: [direct_conversions]
+      numbers: [7.0, 9.0]
+
+  # -- event: latam campaign, 2025-03-03..05-25, Brazil signup rate x2.2, paid social ramp
+  - id: signups_brazil_by_month_2025_02_06
+    question: "How did signups from Brazil trend from February through June 2025?"
+    kind: event
+    source: ground_truth:latam_campaign_brazil_lift_organic
+    spec:
+      metrics: [signups]
+      group_by: [metric_time]
+      where:
+        - {dimension: user__country, op: eq, values: [BR]}
+      time: {grain: month, start: 2025-02-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [signups]
+      numbers: [162.0, 213.0, 234.0, 232.0, 107.0]
+
+  - id: new_mrr_by_month_2025_q2
+    question: "New MRR by month for Q2 2025"
+    kind: event
+    source: ground_truth:latam_campaign_brazil_lift_organic
+    notes: "'new mrr' is a label, so the mrr collision leaves it alone."
+    spec:
+      metrics: [new_mrr]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-04-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [new_mrr]
+      numbers: [4571.67, 4298.67, 3745.67]
+
+  - id: visit_signup_rate_2025_04
+    question: "What was our visit-to-signup rate in April 2025?"
+    kind: event
+    source: ground_truth:latam_campaign_brazil_lift_paid_social
+    spec:
+      metrics: [visit_signup_rate]
+      time: {start: 2025-04-01, end: 2025-04-30}
+    expected:
+      status: resolved
+      metrics: [visit_signup_rate]
+      numbers: [0.0372]
+
+  - id: marketing_spend_paid_social_2025_03_04
+    question: "How much did we spend on paid social in March and April 2025?"
+    kind: event
+    source: ground_truth:latam_campaign_spend_ramp
+    spec:
+      metrics: [marketing_spend]
+      group_by: [metric_time]
+      where:
+        - {dimension: spend__channel, op: eq, values: [paid_social]}
+      time: {grain: month, start: 2025-03-01, end: 2025-04-30}
+    expected:
+      status: resolved
+      metrics: [marketing_spend]
+      numbers: [12598.37, 15310.46]
+
+  # -- event: onboarding_revamp, 2025-08-04..11-30, trial engagement x2
+  - id: trial_activation_rate_by_month_2025_07_12
+    question: "Did the onboarding revamp help? Trial activation rate by month, July through December 2025."
+    kind: event
+    source: ground_truth:onboarding_revamp
+    spec:
+      metrics: [trial_activation_rate]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-07-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [trial_activation_rate]
+      numbers: [0.7105, 0.498, 0.6858, 0.5323, 0.7248, 0.7252]
+
+  - id: trial_conversion_rate_by_quarter_2025_h2
+    question: "Trial conversion rate in Q4 2025 versus Q3"
+    kind: event
+    source: ground_truth:onboarding_revamp
+    spec:
+      metrics: [trial_conversion_rate]
+      group_by: [metric_time]
+      time: {grain: quarter, start: 2025-07-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [trial_conversion_rate]
+      numbers: [0.2579, 0.2507]
+
+  - id: conversions_prefer_2025_10
+    question: "How were conversions in October 2025?"
+    kind: event
+    source: ground_truth:onboarding_revamp
+    notes: "'conversions' prefers the trial conversion rate."
+    spec:
+      metrics: [trial_conversions]
+      time: {start: 2025-10-01, end: 2025-10-31}
+    expected:
+      status: resolved
+      metrics: [trial_conversion_rate]
+      disclosures: ["trial conversion rate"]
+      numbers: [0.2596]
+
+  # -- event: mobile_signup_cta_regression, 2026-02-02..03-15
+  - id: signups_mobile_2026_01_02
+    question: "Signups on mobile in February 2026 versus January"
+    kind: event
+    source: ground_truth:mobile_signup_cta_regression
+    notes: >
+      A count, not the rate. The visit-to-signup rate filtered by device comes
+      back as 1.0 from the semantic layer, so the rate is not asked here.
+    spec:
+      metrics: [signups]
+      group_by: [metric_time]
+      where:
+        - {dimension: user__device, op: eq, values: [mobile]}
+      time: {grain: month, start: 2026-01-01, end: 2026-02-28}
+    expected:
+      status: resolved
+      metrics: [signups]
+      numbers: [1056.0, 1458.0]
+
+  - id: signups_2026_02
+    question: "How many signups did we get in February 2026?"
+    kind: event
+    source: ground_truth:mobile_signup_cta_regression
+    spec:
+      metrics: [signups]
+      time: {start: 2026-02-01, end: 2026-02-28}
+    expected:
+      status: resolved
+      metrics: [signups]
+      numbers: [2233.0]
+
+  # -- event: professional_churn_spike, 2026-04-27..06-28, churn on professional x2.3
+  - id: churned_mrr_professional_2026_05
+    question: "What did churn look like on the professional plan in May 2026?"
+    kind: event
+    source: ground_truth:professional_churn_spike
+    notes: >
+      'churn' prefers churned MRR. 'plan' prefers the subscription day's plan,
+      which churned MRR does not carry; the movement's plan is the one that
+      fits. Probe of a role prefer against a where clause.
+    spec:
+      metrics: [churned_mrr]
+      where:
+        - {dimension: mrr_movement__plan, op: eq, values: [professional]}
+      time: {start: 2026-05-01, end: 2026-05-31}
+    expected:
+      status: resolved
+      metrics: [churned_mrr]
+      disclosures: ["mrr_movement__plan"]
+      numbers: [3567.0]
+
+  - id: mrr_by_month_2026_q2
+    question: "How did MRR move from April through June 2026?"
+    kind: event
+    source: ground_truth:professional_churn_spike
+    spec:
+      metrics: [mrr]
+      group_by: [metric_time]
+      time: {grain: month, start: 2026-04-01, end: 2026-06-30}
+    expected:
+      status: resolved
+      metrics: [mrr]
+      numbers: [2597299.67, 2394136.83, 2605379.5]
+
+  - id: customer_churn_rate_2026_06
+    question: "What was our customer churn rate in June 2026?"
+    kind: event
+    source: ground_truth:professional_churn_spike
+    notes: "Named by label, so the churn collision is masked."
+    spec:
+      metrics: [customer_churn_rate]
+      time: {start: 2026-06-01, end: 2026-06-30}
+    expected:
+      status: resolved
+      metrics: [customer_churn_rate]
+      numbers: [0.0458]
+
+  # -- quiet months
+  - id: payment_failure_rate_2024_12
+    question: "What was the payment failure rate in December 2024?"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [payment_failure_rate]
+      time: {start: 2024-12-01, end: 2024-12-31}
+    expected:
+      status: resolved
+      metrics: [payment_failure_rate]
+      numbers: [0.0218]
+
+  - id: revenue_ask_2025_q3
+    question: "Revenue by month for Q3 2025"
+    kind: quiet
+    source: quiet_month
+    notes: >
+      The tenant's ask. A first-turn miss by design; the stakeholder means
+      cash revenue.
+    spec:
+      metrics: [revenue]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-07-01, end: 2025-09-30}
+    expected:
+      status: needs_clarification
+      clarification_traps: [collision:revenue]
+      answers: {"collision:revenue": revenue}
+      metrics: [revenue]
+      disclosures: ["revenue"]
+      numbers: [63007.0, 56080.0, 54208.0]
+
+  - id: mrr_2025_01_31
+    question: "What was MRR at the end of January 2025?"
+    kind: quiet
+    source: quiet_month
+    notes: "A point in time, so a one-day window."
+    spec:
+      metrics: [mrr]
+      time: {start: 2025-01-31, end: 2025-01-31}
+    expected:
+      status: resolved
+      metrics: [mrr]
+      numbers: [14655.83]
+
+  - id: signups_by_channel_2024_q4
+    question: "Signups by channel for Q4 2024"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [signups]
+      group_by: [user__signup_channel]
+      time: {start: 2024-10-01, end: 2024-12-31}
+    expected:
+      status: resolved
+      metrics: [signups]
+      numbers: [379.0, 508.0, 283.0, 587.0, 1255.0, 123.0, 1017.0]
+
+  - id: arpu_2025_07
+    question: "What was ARPU in July 2025?"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [arpu]
+      time: {start: 2025-07-01, end: 2025-07-31}
+    expected:
+      status: resolved
+      metrics: [arpu]
+      numbers: [483.8]
+
+  # -- over-refusal: answerable questions that look like a trap
+  - id: net_new_mrr_explicit_2025_q1
+    question: "What's our net new MRR for Q1 2025? Not total MRR, the movement."
+    kind: over_refusal
+    source: hand
+    notes: >
+      Names the non-preferred candidate and mentions the preferred one. The
+      collision must leave net new MRR in place.
+    spec:
+      metrics: [net_new_mrr]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_new_mrr]
+      numbers: [8606.17]
+
+  - id: cash_revenue_ask_2025_03
+    question: "Cash revenue collected in March 2025, not MRR"
+    kind: over_refusal
+    source: hand
+    notes: >
+      The person has said which one they mean, but 'revenue' is both the
+      phrase and a candidate name, so the ask fires anyway. Recorded as the
+      ask it is today; a first-turn miss the policy owes an answer for.
+    spec:
+      metrics: [revenue]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: [collision:revenue]
+      answers: {"collision:revenue": revenue}
+      metrics: [revenue]
+      disclosures: ["revenue"]
+      numbers: [31128.0]
+
+  - id: signups_by_country_2025
+    question: "Which country signed up the most users in 2025?"
+    kind: over_refusal
+    source: hand
+    spec:
+      metrics: [signups]
+      group_by: [user__country]
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [signups]
+      disclosures: ["signup country"]
+      numbers: [1465.0, 951.0, 1840.0, 1221.0, 993.0, 8087.0, 1128.0, 929.0, 1697.0, 1499.0, 1978.0, 2454.0]
+
+  - id: failed_payments_2026_q1
+    question: "How many payments failed in Q1 2026?"
+    kind: over_refusal
+    source: hand
+    spec:
+      metrics: [failed_payments]
+      time: {start: 2026-01-01, end: 2026-03-31}
+    expected:
+      status: resolved
+      metrics: [failed_payments]
+      numbers: [350.0]
+
+  - id: trial_conversions_professional_2025_q3
+    question: "How many trials converted to the professional plan in Q3 2025?"
+    kind: over_refusal
+    source: hand
+    notes: >
+      'plan' prefers the subscription day's plan, which a trial does not carry,
+      so the prefer must stay on the trial's plan. A count, not the rate: a
+      trial's plan is only set when it converts, so the rate filtered by plan
+      is 1.0 by construction.
+    spec:
+      metrics: [trial_conversions]
+      where:
+        - {dimension: trial__plan, op: eq, values: [professional]}
+      time: {start: 2025-07-01, end: 2025-09-30}
+    expected:
+      status: resolved
+      metrics: [trial_conversions]
+      disclosures: ["trial__plan"]
+      numbers: [177.0]
+
+  - id: expansion_mrr_by_month_2025
+    question: "Expansion MRR by month for 2025"
+    kind: over_refusal
+    source: hand
+    spec:
+      metrics: [expansion_mrr]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [expansion_mrr]
+      numbers: [510.0, 243.67, 252.17, 362.67, 246.5, 736.67, 153.0, 742.33, 365.5, 640.33, 325.83, 345.67]
