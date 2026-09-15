@@ -226,6 +226,20 @@ class Service:
             )
         spec = outcome.spec
         disclosures = [d.text for d in outcome.disclosures]
+        # A trap rewrite (a prefer or an applied choice) can name a metric that
+        # does not carry the spec's dimensions. Check again so the refusal is
+        # Understory's message, never the semantic layer's resolution error.
+        problem = self._validate(spec)
+        if problem is not None:
+            return self._refuse(
+                session,
+                t0,
+                "invalid",
+                problem.message,
+                spec,
+                problem.suggestions,
+                missing=problem.missing,
+            )
 
         # 3. Time.
         anchor = self._anchor_for(spec.metrics)

@@ -34,8 +34,20 @@ def registry() -> Registry:
     return load_registry(tenants_dir() / "alpenglow" / "traps.yml")
 
 
-def _metric(name: str, label: str | None = None, synonyms: list[str] | None = None) -> MetricInfo:
-    return MetricInfo(name=name, label=label, type="simple", synonyms=synonyms or [])
+def _metric(
+    name: str,
+    label: str | None = None,
+    synonyms: list[str] | None = None,
+    dimensions: list[str] | None = None,
+) -> MetricInfo:
+    return MetricInfo(
+        name=name, label=label, type="simple", synonyms=synonyms or [], dimensions=dimensions or []
+    )
+
+
+def _tenant(name: str) -> tuple[Registry, Catalog]:
+    cfg = load_tenant(tenants_dir() / name)
+    return load_registry(cfg.traps_path), load_catalog(cfg.manifest_path)
 
 
 def _dim(name: str) -> DimensionInfo:
@@ -86,7 +98,7 @@ def test_preferred_question(registry, catalog):
     out = check(spec, registry, catalog, max_clarifications=3)
     assert out.refusal is None
     assert out.clarifications == []
-    assert out.fired == ["collision:revenue", "dimension_role:region"]
+    assert out.fired == ["dimension_role:region", "collision:revenue"]
     assert out.spec.metrics == ["net_revenue"]
     assert out.spec.where[0].dimension == "order__country"
     assert out.spec.where[0].values == ["US"]
@@ -111,7 +123,7 @@ def test_asked_question(registry, catalog):
     )
     out = check(spec, registry, catalog, max_clarifications=3)
     assert out.refusal is None
-    assert out.fired == ["collision:margin", "dimension_role:region"]
+    assert out.fired == ["dimension_role:region", "collision:margin"]
 
     [clar] = out.clarifications
     assert clar.trap == "collision:margin"
@@ -140,7 +152,7 @@ def test_clarified_question_resolves(registry, catalog, trap_ref):
     assert out.refusal is None
     assert out.clarifications == []
     assert out.spec.metrics == ["margin_rate"]
-    assert out.fired == ["collision:margin", "dimension_role:region"]
+    assert out.fired == ["dimension_role:region", "collision:margin"]
     assert {d.source for d in out.disclosures} == {"collision:margin", "dimension_role:region"}
 
 
@@ -277,6 +289,219 @@ def test_ask_dimension_role_with_choice():
     out = check(spec, registry, catalog, max_clarifications=3)
     assert out.clarifications == []
     assert out.spec.group_by == ["e__x"]
+
+
+# --------------------------------------------------------------------------- #
+# A prefer is bounded by the catalog
+# --------------------------------------------------------------------------- #
+
+SALES = Registry.model_validate(
+    {
+        "collisions": [
+            {
+                "phrase": ["sales"],
+                "candidates": ["net", "pos"],
+                "policy": "prefer net",
+                "hint": {"net": "Shipment value.", "pos": "Scanned at retail."},
+            }
+        ]
+    }
+)
+SALES_CATALOG = _tiny_catalog(
+    net=_metric("net", "Net Revenue", dimensions=["metric_time", "d__x"]),
+    pos=_metric("pos", "POS Dollars", dimensions=["metric_time", "d__x", "e__x"]),
+)
+
+
+def test_prefer_skipped_when_where_needs_the_spec_metric():
+    """'sales' prefers net, but the filter is on a dimension only pos carries."""
+    spec = MetricSpec(
+        metrics=["pos"],
+        where=[WhereClause(dimension="e__x", op="eq", values=["whole_earth"])],
+        time=LAST_QUARTER,
+        question="How did whole earth sales look?",
+    )
+    out = check(spec, SALES, SALES_CATALOG, max_clarifications=3)
+    assert out.spec.metrics == ["pos"]
+    assert out.spec.where[0].dimension == "e__x"
+    assert out.fired == ["collision:sales"]
+    [disc] = out.disclosures
+    assert disc.text == (
+        "'sales' is read as POS Dollars because of the filter on e__x, "
+        "which Net Revenue does not carry."
+    )
+
+    # The same filter on a dimension both carry lets the prefer apply as usual.
+    spec.where[0].dimension = "d__x"
+    out = check(spec, SALES, SALES_CATALOG, max_clarifications=3)
+    assert out.spec.metrics == ["net"]
+    assert out.disclosures[0].text.startswith("'sales' is read as Net Revenue. Shipment value.")
+
+
+def test_prefer_skipped_when_group_by_needs_the_spec_metric():
+    spec = MetricSpec(
+        metrics=["pos"],
+        group_by=["e__x", "metric_time__month"],
+        time=LAST_QUARTER,
+        question="sales by banner by month",
+    )
+    out = check(spec, SALES, SALES_CATALOG, max_clarifications=3)
+    assert out.spec.metrics == ["pos"]
+    assert out.spec.group_by == ["e__x", "metric_time__month"]
+    [disc] = out.disclosures
+    assert disc.text == (
+        "'sales' is read as POS Dollars because of the group by e__x, "
+        "which Net Revenue does not carry."
+    )
+
+
+def test_role_prefer_skipped_when_metric_lacks_the_preferred_dimension():
+    registry = Registry.model_validate(
+        {
+            "dimension_roles": [
+                {"phrase": ["x"], "candidates": ["d__x", "e__x"], "policy": "prefer e__x"}
+            ]
+        }
+    )
+    catalog = _tiny_catalog(
+        a=_metric("a", "A", dimensions=["metric_time", "d__x"]),
+        b=_metric("b", "B", dimensions=["metric_time", "d__x", "e__x"]),
+    )
+    spec = MetricSpec(metrics=["a"], group_by=["d__x"], time=LAST_QUARTER, question="a by x")
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert out.spec.group_by == ["d__x"]
+    assert out.fired == ["dimension_role:x"]
+    [disc] = out.disclosures
+    assert disc.text == "'x' is read as d__x because A does not carry e__x."
+
+    # A where clause is judged the same way, and a metric that carries it swaps.
+    spec = MetricSpec(
+        metrics=["b"],
+        where=[WhereClause(dimension="d__x", op="eq", values=["pro"])],
+        time=LAST_QUARTER,
+        question="b on the x",
+    )
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert out.spec.where[0].dimension == "e__x"
+    assert out.disclosures[0].text.startswith("'x' is read as e__x.")
+
+
+def test_roles_settle_dimensions_before_collisions_judge_them():
+    """'sales in the West': the West becomes order country first, so net revenue,
+    which carries order country but not customer country, can still apply."""
+    registry, catalog = _tenant("alpenglow")
+    spec = MetricSpec(
+        metrics=["gross_revenue"],
+        where=[WhereClause(dimension="customer__country", op="in", values=["US"])],
+        time=LAST_QUARTER,
+        question="How were sales in the West last quarter?",
+    )
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert out.spec.metrics == ["net_revenue"]
+    assert out.spec.where[0].dimension == "order__country"
+    assert "customer__country" not in catalog.metrics["net_revenue"].dimensions
+
+
+def test_ask_still_asks_when_the_where_fits_only_the_spec_metric():
+    registry, catalog = _tenant("bristlecone")
+    spec = MetricSpec(
+        metrics=["pos_units"],
+        where=[WhereClause(dimension="scan__retailer_banner", op="eq", values=["greenfields"])],
+        time=LAST_QUARTER,
+        question="What was our volume at greenfields?",
+    )
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert [c.trap for c in out.clarifications] == ["collision:units"]
+    assert out.spec.metrics == ["pos_units"]
+
+
+# --------------------------------------------------------------------------- #
+# A phrase inside a metric the spec names outside the candidates is covered
+# --------------------------------------------------------------------------- #
+
+
+def test_phrase_inside_spec_metric_label_is_covered():
+    """'sales cycle' contains the revenue ask's phrase; 'deals' hits the deals prefer.
+    The spec names Sales Cycle Days, which neither trap governs, so neither fires."""
+    registry, catalog = _tenant("meridian")
+    spec = MetricSpec(
+        metrics=["sales_cycle_days"],
+        group_by=["metric_time"],
+        time=TimeSpec(grain="month", start=date(2025, 4, 1), end=date(2025, 7, 31)),
+        question="Are deals taking longer to close? Sales cycle by month, April through July 2025.",
+    )
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert out.clarifications == []
+    assert out.fired == []
+    assert out.disclosures == []
+    assert out.spec.metrics == ["sales_cycle_days"]
+
+    # A candidate alongside the covering metric still fires on its own phrase.
+    spec.metrics = ["sales_cycle_days", "bookings"]
+    spec.question = "Sales cycle and revenue by month"
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert [c.phrase for c in out.clarifications] == ["revenue"]
+
+
+def test_covering_applies_to_dimension_roles_too():
+    registry = Registry.model_validate(
+        {
+            "dimension_roles": [
+                {"phrase": ["country"], "candidates": ["d__x", "e__x"], "policy": "prefer e__x"}
+            ]
+        }
+    )
+    catalog = Catalog(
+        metrics={"a": _metric("a", dimensions=["f__country"])},
+        dimensions={
+            "d__x": _dim("d__x"),
+            "e__x": _dim("e__x"),
+            "f__country": _dim("f__country"),
+        },
+    )
+    spec = MetricSpec(
+        metrics=["a"], group_by=["f__country"], time=LAST_QUARTER, question="a by country"
+    )
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert out.fired == [] and out.disclosures == []
+    assert out.spec.group_by == ["f__country"]
+
+
+# --------------------------------------------------------------------------- #
+# A prefer disclosure describes what happened to the spec
+# --------------------------------------------------------------------------- #
+
+
+def test_prefer_discloses_only_what_it_did():
+    registry, catalog = _tenant("meridian")
+
+    # The spec names none of the candidates: nothing to read, nothing to say.
+    spec = MetricSpec(
+        metrics=["deals_lost"], time=LAST_QUARTER, question="How many deals did we lose?"
+    )
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert out.spec.metrics == ["deals_lost"]
+    assert out.fired == [] and out.disclosures == []
+
+    # The spec already names the preferred candidate: the phrase was ambiguous,
+    # so the reading is still disclosed with its alternatives.
+    spec = MetricSpec(metrics=["deals_won"], time=LAST_QUARTER, question="How many deals closed?")
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert out.fired == ["collision:deals"]
+    assert out.disclosures[0].text.startswith("'deals' is read as Deals Won.")
+
+
+def test_prefer_kept_explicit_candidate_is_disclosed_as_named():
+    registry, catalog = _tenant("white_cube")
+    spec = MetricSpec(
+        metrics=["net_new_mrr"],
+        time=LAST_QUARTER,
+        question="What's our net new MRR for Q1? Not total MRR, the movement.",
+    )
+    out = check(spec, registry, catalog, max_clarifications=3)
+    assert out.spec.metrics == ["net_new_mrr"]
+    [disc] = [d for d in out.disclosures if d.source == "collision:mrr"]
+    assert disc.text == "'mrr' is read as Net New MRR, as named."
 
 
 # --------------------------------------------------------------------------- #

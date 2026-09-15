@@ -1,0 +1,291 @@
+# Bristlecone Botanicals (CPG wholesale) realistic set.
+#
+# Drafted from meta.ground_truth with `understory draft-realistic`, then
+# rewritten to sound like the people who ask. `source` keeps the lineage.
+# Numbers are a snapshot from `understory fill` (verified: false) until a human
+# checks them against a known report.
+version: 1
+
+questions:
+  # -- event: teas_demand_scare, 2024-11-11..24, consumer demand for teas fell 75%
+  - id: pos_dollars_teas_2024_10_12
+    question: "How were teas selling at retail from October through December 2024?"
+    kind: event
+    source: ground_truth:teas_demand_scare
+    notes: >
+      Scan dollars filtered to the teas category. The category role prefers the
+      shipment's category, which scan data does not carry, so this is a probe
+      of whether a prefer can push a spec onto a dimension the metric lacks.
+    spec:
+      metrics: [pos_dollars]
+      group_by: [metric_time]
+      where:
+        - {dimension: scan__category, op: eq, values: [teas]}
+      time: {grain: month, start: 2024-10-01, end: 2024-12-31}
+    expected:
+      status: resolved
+      metrics: [pos_dollars]
+      numbers: [1538960.79, 2443778.2, 1619925.07]
+
+  - id: topline_by_month_2024_q4
+    question: "What was topline by month for Q4 2024?"
+    kind: event
+    source: ground_truth:teas_demand_scare
+    notes: "'topline' prefers wholesale net revenue."
+    spec:
+      metrics: [wholesale_net_revenue]
+      group_by: [metric_time]
+      time: {grain: month, start: 2024-10-01, end: 2024-12-31}
+    expected:
+      status: resolved
+      metrics: [wholesale_net_revenue]
+      disclosures: ["wholesale net revenue"]
+      numbers: [1689334.95, 1614323.03, 1868239.08]
+
+  # -- event: whole_earth_delisting, 2025-02-10..03-23, velocity at Whole Earth down 45%
+  - id: pos_dollars_whole_earth_2025_q1
+    question: "How did Whole Earth scan sales look in Q1 2025, month by month?"
+    kind: event
+    source: ground_truth:whole_earth_delisting
+    notes: >
+      'sales' prefers wholesale net revenue, but the question is about a
+      retailer banner, which only scan data has. A swap would make the spec
+      invalid. Probe of prefer versus an explicit where clause.
+    spec:
+      metrics: [pos_dollars]
+      group_by: [metric_time]
+      where:
+        - {dimension: scan__retailer_banner, op: eq, values: [whole_earth]}
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [pos_dollars]
+      disclosures: ["pos dollars", "wholesale net revenue"]
+      numbers: [530451.29, 510329.06, 423635.44]
+
+  - id: pos_dollars_by_banner_2025_q1
+    question: "Scan dollars by retailer banner for Q1 2025"
+    kind: event
+    source: ground_truth:whole_earth_delisting
+    spec:
+      metrics: [pos_dollars]
+      group_by: [scan__retailer_banner]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [pos_dollars]
+      numbers: [1351534.36, 1937378.15, 2631326.31, 1020799.85, 1464415.79]
+
+  # -- event: brand_budget_cut, 2025-05-12..06-08, paid social spend down 60%
+  - id: marketing_spend_paid_social_2025_05_06
+    question: "How much did we spend on paid social in May and June 2025?"
+    kind: event
+    source: ground_truth:brand_budget_cut
+    notes: >
+      'spend' prefers trade spend, but paid social is an advertising channel
+      that trade spend does not carry. Probe of prefer versus where.
+    spec:
+      metrics: [marketing_spend]
+      group_by: [metric_time]
+      where:
+        - {dimension: spend__channel, op: eq, values: [paid_social]}
+      time: {grain: month, start: 2025-05-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [marketing_spend]
+      disclosures: ["marketing spend", "trade spend"]
+      numbers: [13276.52, 14972.07]
+
+  - id: marketing_spend_by_month_2025_04_07
+    question: "Marketing spend by month, April through July 2025"
+    kind: event
+    source: ground_truth:brand_budget_cut
+    notes: "'marketing spend' is named, so the spend collision is masked."
+    spec:
+      metrics: [marketing_spend]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-04-01, end: 2025-07-31}
+    expected:
+      status: resolved
+      metrics: [marketing_spend]
+      numbers: [30315.59, 33017.01, 43898.2, 30704.7]
+
+  # -- event: tinctures_viral_spike, 2025-09-08..21, demand x1.6
+  - id: shipped_cases_tinctures_2025_08_09
+    question: "Tinctures went viral in September 2025. How many cases did we ship that month versus August?"
+    kind: event
+    source: ground_truth:tinctures_viral_spike
+    spec:
+      metrics: [shipped_cases]
+      group_by: [metric_time]
+      where:
+        - {dimension: shipment__category, op: eq, values: [tinctures]}
+      time: {grain: month, start: 2025-08-01, end: 2025-09-30}
+    expected:
+      status: resolved
+      metrics: [shipped_cases]
+      numbers: [5021.0, 3704.0]
+
+  - id: net_revenue_2025_09
+    question: "What was net revenue in September 2025?"
+    kind: event
+    source: ground_truth:tinctures_viral_spike
+    spec:
+      metrics: [wholesale_net_revenue]
+      time: {start: 2025-09-01, end: 2025-09-30}
+    expected:
+      status: resolved
+      metrics: [wholesale_net_revenue]
+      disclosures: ["wholesale net revenue"]
+      numbers: [1317534.91]
+
+  - id: volume_ask_2025_09
+    question: "How did volume look in September 2025?"
+    kind: event
+    source: ground_truth:tinctures_viral_spike
+    notes: >
+      The tenant's one ask. A first-turn miss by design; the stakeholder means
+      cases shipped.
+    spec:
+      metrics: [shipped_cases]
+      time: {start: 2025-09-01, end: 2025-09-30}
+    expected:
+      status: needs_clarification
+      clarification_traps: [collision:units]
+      answers: {"collision:units": shipped_cases}
+      metrics: [shipped_cases]
+      disclosures: ["shipped cases"]
+      numbers: [35953.0]
+
+  # -- quiet months
+  - id: shipped_cases_by_channel_2024_q4
+    question: "Shipped cases by channel for Q4 2024"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [shipped_cases]
+      group_by: [shipment__channel_type]
+      time: {start: 2024-10-01, end: 2024-12-31}
+    expected:
+      status: resolved
+      metrics: [shipped_cases]
+      disclosures: ["shipment's channel"]
+      numbers: [31595.0, 33817.0, 23087.0, 16612.0, 41956.0]
+
+  - id: avg_case_price_2025_q3
+    question: "What was our average case price in Q3 2025?"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [avg_case_price]
+      time: {start: 2025-07-01, end: 2025-09-30}
+    expected:
+      status: resolved
+      metrics: [avg_case_price]
+      numbers: [35.6]
+
+  - id: trade_spend_by_category_2025_h1
+    question: "Trade spend by category for the first half of 2025"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [trade_spend]
+      group_by: [shipment__category]
+      time: {start: 2025-01-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [trade_spend]
+      disclosures: ["shipment's category"]
+      numbers: [0.0, 8671.27, 32329.59]
+
+  - id: shipped_cases_independents_2026_01
+    question: "How many cases went to independents in January 2026?"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [shipped_cases]
+      where:
+        - {dimension: shipment__channel_type, op: eq, values: [independents]}
+      time: {start: 2026-01-01, end: 2026-01-31}
+    expected:
+      status: resolved
+      metrics: [shipped_cases]
+      numbers: [9850.0]
+
+  - id: net_revenue_greenfields_2025
+    question: "Net revenue at Greenfields for 2025"
+    kind: quiet
+    source: hand
+    notes: >
+      A fair question with no answer: revenue is a shipment number and banners
+      only exist on scan data. The right reply is a refusal that points at scan
+      dollars by banner.
+    spec:
+      metrics: [wholesale_net_revenue]
+      where:
+        - {dimension: scan__retailer_banner, op: eq, values: [greenfields]}
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: invalid
+      disclosures: ["not available"]
+
+  # -- over-refusal: answerable questions that look like a trap
+  - id: gross_to_net_2025_q2
+    question: "What's our gross-to-net for Q2 2025?"
+    kind: over_refusal
+    source: hand
+    notes: >
+      Sounds like margin, which is unanswerable here. It is gross revenue, trade
+      spend and net revenue side by side.
+    spec:
+      metrics: [wholesale_gross_revenue, trade_spend, wholesale_net_revenue]
+      time: {start: 2025-04-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [wholesale_gross_revenue, trade_spend, wholesale_net_revenue]
+      numbers: [4119210.66, 8671.27, 4110539.39]
+
+  - id: pos_units_and_shipped_cases_2025_03
+    question: "POS units and shipped cases side by side for March 2025"
+    kind: over_refusal
+    source: hand
+    notes: >
+      Both candidates of the units ask are named by label, so the ask must not
+      fire.
+    spec:
+      metrics: [pos_units, shipped_cases]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [pos_units, shipped_cases]
+      numbers: [379418.0, 47010.0]
+
+  - id: pos_dollars_mass_2025_q1
+    question: "How much did we sell through mass in Q1 2025, in consumer dollars?"
+    kind: over_refusal
+    source: hand
+    spec:
+      metrics: [pos_dollars]
+      where:
+        - {dimension: scan__channel_type, op: eq, values: [mass]}
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [pos_dollars]
+      numbers: [1937378.15]
+
+  - id: marketing_spend_podcasts_2025_06
+    question: "What did we spend on podcast ads in June 2025?"
+    kind: over_refusal
+    source: ground_truth:surprise_rate_drop_2025-06-12
+    notes: "'spend' prefers trade spend; podcasts is an ad channel."
+    spec:
+      metrics: [marketing_spend]
+      where:
+        - {dimension: spend__channel, op: eq, values: [podcasts]}
+      time: {start: 2025-06-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [marketing_spend]
+      disclosures: ["marketing spend", "trade spend"]
+      numbers: [7486.91]

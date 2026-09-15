@@ -1,0 +1,299 @@
+# Meridian Partners (B2B services) realistic set.
+#
+# Drafted from meta.ground_truth with `understory draft-realistic`, then
+# rewritten to sound like the people who ask. `source` keeps the lineage.
+# Numbers are a snapshot from `understory fill` (verified: false) until a human
+# checks them against a known report.
+version: 1
+
+questions:
+  # -- event: surprise referral spike, 2024-03-25..26
+  - id: leads_by_month_2024_03_04
+    question: "Leads by month for March and April 2024"
+    kind: event
+    source: ground_truth:surprise_rate_spike_2024-03-25
+    spec:
+      metrics: [leads]
+      group_by: [metric_time]
+      time: {grain: month, start: 2024-03-01, end: 2024-04-30}
+    expected:
+      status: resolved
+      metrics: [leads]
+      numbers: [1061.0, 1153.0]
+
+  # -- event: outbound_team_turnover, 2024-09-09..10-06, outbound leads down 45%
+  - id: leads_outbound_2024_08_09
+    question: "How many leads came in from outbound in September 2024 versus August?"
+    kind: event
+    source: ground_truth:outbound_team_turnover
+    spec:
+      metrics: [leads]
+      group_by: [metric_time]
+      where:
+        - {dimension: deal__source, op: eq, values: [outbound]}
+      time: {grain: month, start: 2024-08-01, end: 2024-09-30}
+    expected:
+      status: resolved
+      metrics: [leads]
+      numbers: [257.0, 444.0]
+
+  - id: leads_by_source_2024_q3
+    question: "Leads by source for Q3 2024"
+    kind: event
+    source: ground_truth:outbound_team_turnover
+    notes: >
+      'source' prefers the won deal's source, which leads do not carry. Probe of
+      whether a role prefer can push a spec onto a dimension the metric lacks.
+    spec:
+      metrics: [leads]
+      group_by: [deal__source]
+      time: {start: 2024-07-01, end: 2024-09-30}
+    expected:
+      status: resolved
+      metrics: [leads]
+      disclosures: ["deal__source"]
+      numbers: [1041.0, 662.0, 351.0, 1190.0]
+
+  # -- event: discounting_creep, 2024-11-11..2025-01-05, deal size down 20%
+  - id: avg_deal_size_by_month_2024_10_2025_01
+    question: "Has our average deal size been shrinking? Show me by month from October 2024 through January 2025."
+    kind: event
+    source: ground_truth:discounting_creep
+    spec:
+      metrics: [avg_deal_size]
+      group_by: [metric_time]
+      time: {grain: month, start: 2024-10-01, end: 2025-01-31}
+    expected:
+      status: resolved
+      metrics: [avg_deal_size]
+      numbers: [47980.68, 38144.09, 49153.49, 29883.17]
+
+  - id: bookings_2024_12
+    question: "What did we book in December 2024?"
+    kind: event
+    source: ground_truth:discounting_creep
+    notes: "'book' is not a trap phrase. Bookings is the obvious metric."
+    spec:
+      metrics: [bookings]
+      time: {start: 2024-12-01, end: 2024-12-31}
+    expected:
+      status: resolved
+      metrics: [bookings]
+      numbers: [3547400.0]
+
+  # -- event: healthcare_proposal_stall, 2025-01-13..02-23
+  - id: win_rate_healthcare_2025_q1
+    question: "What was our win rate in healthcare for Q1 2025?"
+    kind: event
+    source: ground_truth:healthcare_proposal_stall
+    notes: >
+      Win rate carries no dimensions at all, so the honest answer is a refusal
+      that points at deals won and closed deals by industry.
+    spec:
+      metrics: [win_rate]
+      where:
+        - {dimension: won_deal__industry, op: eq, values: [healthcare]}
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: invalid
+      disclosures: ["not available"]
+
+  - id: deals_won_healthcare_by_month_2025_q1
+    question: "How many healthcare deals did we win each month in Q1 2025?"
+    kind: event
+    source: ground_truth:healthcare_proposal_stall
+    notes: "'deals' prefers deals won, which is what was asked."
+    spec:
+      metrics: [deals_won]
+      group_by: [metric_time]
+      where:
+        - {dimension: won_deal__industry, op: eq, values: [healthcare]}
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [deals_won]
+      disclosures: ["deals won"]
+      numbers: [27.0, 12.0, 17.0]
+
+  - id: proposals_sent_2025_02
+    question: "How many proposals went out in February 2025?"
+    kind: event
+    source: ground_truth:healthcare_proposal_stall
+    spec:
+      metrics: [proposals_sent]
+      time: {start: 2025-02-01, end: 2025-02-28}
+    expected:
+      status: resolved
+      metrics: [proposals_sent]
+      numbers: [385.0]
+
+  - id: revenue_ask_2025_q1
+    question: "Revenue for Q1 2025"
+    kind: event
+    source: ground_truth:healthcare_proposal_stall
+    notes: >
+      The tenant's ask. A first-turn miss by design; the stakeholder means
+      bookings.
+    spec:
+      metrics: [bookings]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: needs_clarification
+      clarification_traps: [collision:revenue]
+      answers: {"collision:revenue": bookings}
+      metrics: [bookings]
+      disclosures: ["bookings"]
+      numbers: [11002300.0]
+
+  # -- event: legal_backlog, 2025-05-05..06-15, cycle time x1.6
+  - id: sales_cycle_by_month_2025_04_07
+    question: "Are deals taking longer to close? Sales cycle by month, April through July 2025."
+    kind: over_refusal
+    source: ground_truth:legal_backlog
+    notes: >
+      'sales' is the revenue ask's phrase, but 'sales cycle' is a metric of its
+      own. If the ask fires here, the norm policy is too eager.
+    spec:
+      metrics: [sales_cycle_days]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-04-01, end: 2025-07-31}
+    expected:
+      status: resolved
+      metrics: [sales_cycle_days]
+      numbers: [46.32, 43.36, 39.38, 35.34]
+
+  - id: open_pipeline_value_2025_06_30
+    question: "How much pipeline was open at the end of June 2025?"
+    kind: event
+    source: ground_truth:legal_backlog
+    notes: "'pipeline' prefers open pipeline value. A point in time, so a one-day window."
+    spec:
+      metrics: [open_pipeline_value]
+      time: {start: 2025-06-30, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [open_pipeline_value]
+      disclosures: ["open pipeline value", "open deals"]
+      numbers: [34242100.0]
+
+  # -- quiet months
+  - id: collected_cash_by_month_2025_q3
+    question: "Collected cash by month for Q3 2025"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [collected_cash]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-07-01, end: 2025-09-30}
+    expected:
+      status: resolved
+      metrics: [collected_cash]
+      numbers: [6215500.0, 4988140.0, 4844400.0]
+
+  - id: deals_2025_08
+    question: "How many deals did we close in August 2025?"
+    kind: quiet
+    source: quiet_month
+    notes: "'deals' prefers deals won; closed deals is offered as the alternative."
+    spec:
+      metrics: [deals_won]
+      time: {start: 2025-08-01, end: 2025-08-31}
+    expected:
+      status: resolved
+      metrics: [deals_won]
+      disclosures: ["deals won", "closed deals"]
+      numbers: [117.0]
+
+  - id: bookings_by_size_tier_2025
+    question: "Bookings by size tier for 2025"
+    kind: quiet
+    source: quiet_month
+    spec:
+      metrics: [bookings]
+      group_by: [won_deal__size_tier]
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [bookings]
+      numbers: [22043100.0, 7968300.0, 30783900.0]
+
+  - id: invoiced_revenue_2025_q4
+    question: "Invoiced revenue for Q4 2025"
+    kind: quiet
+    source: quiet_month
+    notes: "Names a candidate of the revenue ask, so the ask is masked."
+    spec:
+      metrics: [invoiced_revenue]
+      time: {start: 2025-10-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [invoiced_revenue]
+      numbers: [16826820.0]
+
+  - id: deals_lost_2025_q2
+    question: "How many deals did we lose in Q2 2025?"
+    kind: quiet
+    source: quiet_month
+    notes: "'deals' prefers deals won, but deals lost is what was asked and it is named."
+    spec:
+      metrics: [deals_lost]
+      time: {start: 2025-04-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [deals_lost]
+      numbers: [4010.0]
+
+  # -- over-refusal: answerable questions that look like a trap
+  - id: invoiced_vs_collected_2025_q1
+    question: "What did we invoice versus collect in Q1 2025?"
+    kind: over_refusal
+    source: hand
+    notes: "Two candidates of the revenue ask named together. No ask; both metrics."
+    spec:
+      metrics: [invoiced_revenue, collected_cash]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [invoiced_revenue, collected_cash]
+      numbers: [10440460.0, 10656880.0]
+
+  - id: deals_won_by_source_2025
+    question: "Which lead source wins us the most deals? Full year 2025."
+    kind: over_refusal
+    source: hand
+    spec:
+      metrics: [deals_won]
+      group_by: [won_deal__source]
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [deals_won]
+      disclosures: ["deals won", "lead source"]
+      numbers: [488.0, 93.0, 269.0, 515.0]
+
+  - id: avg_deal_size_enterprise_2025
+    question: "Average deal size for enterprise in 2025"
+    kind: over_refusal
+    source: hand
+    spec:
+      metrics: [avg_deal_size]
+      where:
+        - {dimension: won_deal__size_tier, op: eq, values: [enterprise]}
+      time: {start: 2025-01-01, end: 2025-12-31}
+    expected:
+      status: resolved
+      metrics: [avg_deal_size]
+      numbers: [123630.12]
+
+  - id: bookings_and_cash_by_month_2025_h1
+    question: "Bookings and collected cash by month for the first half of 2025"
+    kind: over_refusal
+    source: hand
+    spec:
+      metrics: [bookings, collected_cash]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-06-30}
+    expected:
+      status: resolved
+      metrics: [bookings, collected_cash]
+      numbers: [5167700.0, 3248000.0, 3592800.0, 2762020.0, 3018200.0, 3642880.0, 4391300.0, 4251980.0, 5204500.0, 4773020.0, 4124400.0, 5012120.0]

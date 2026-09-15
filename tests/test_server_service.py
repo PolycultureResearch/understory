@@ -46,6 +46,28 @@ def test_context_and_discovery(service, session):
     assert vals["status"] == Status.resolved and vals["values"]
 
 
+def test_trap_rewrite_cannot_bypass_validation(service, session):
+    """Gross margin carries category; the chosen margin rate does not. The refusal
+    is Understory's invalid message, never MetricFlow's resolution error."""
+    r = service.query_metrics(
+        session,
+        {
+            "metrics": ["gross_margin"],
+            "group_by": ["order_item__category"],
+            "time": {"start": "2025-01-01", "end": "2025-03-31"},
+            "question": "margin by category in Q1 2025",
+            "clarifications": [{"trap": "collision:margin", "choice": "margin_rate"}],
+        },
+    )
+    assert r.status == Status.invalid, r
+    assert r.refusal is not None
+    assert r.refusal.message == (
+        "Dimension 'order_item__category' is not available for margin_rate. "
+        "Valid dimensions are listed by describe_metric."
+    )
+    assert r.refusal.missing == ["order_item__category"]
+
+
 def test_governed_query_resolves(service, session):
     r = service.query_metrics(
         session,

@@ -1,4 +1,11 @@
-"""Golden question sets: `tenants/<name>/golden/questions.yml`.
+"""Golden question sets: `tenants/<name>/golden/questions.yml` and `realistic.yml`.
+
+A tenant has two sets. The trap set (`questions.yml`) is hand-written to
+exercise every trap and refusal path and guards correctness. The realistic set
+(`realistic.yml`) is weighted toward what stakeholders actually ask and guards
+adoption; it is drafted by `understory.harness.realistic` from the seeded
+ground truth, hand-edited, and its numbers are snapshotted by `fill_numbers`.
+Both use the same item shape and the same scorers.
 
 A golden item is a question plus what a correct run does with it. Because the
 fake_companies data is seed deterministic, the expected numbers are exact, not
@@ -42,6 +49,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from understory.types import MetricSpec
 
 GoldenStatus = Literal["resolved", "needs_clarification", "unanswerable", "invalid"]
+GoldenKind = Literal["trap", "event", "quiet", "over_refusal", "fault"]
+"""What an item is for. Trap items guard a declared trap or refusal path. The
+realistic set's kinds: `event` asks about a month where the seeded ground truth
+put something, `quiet` about a month where nothing happened, `over_refusal` is
+an answerable question that looks risky, `fault` a month with a data-quality
+fault (not yet drafted; the server has no volume or freshness check to score)."""
 
 
 class Expectation(BaseModel):
@@ -78,6 +91,13 @@ class GoldenItem(BaseModel):
     spec: dict[str, Any] | None = None
     """The MetricSpec the question should resolve to. Required for the deterministic check."""
     notes: str | None = None
+    kind: GoldenKind | None = None
+    """Left unset on trap-set items. See `GoldenKind`."""
+    source: str | None = None
+    """Where a drafted item came from, e.g. `ground_truth:paid_social_budget_cut`."""
+    verified: bool = False
+    """True once a human checked the numbers against a known report. A snapshot
+    taken by running Understory once is `false`: it guards regression, not truth."""
 
     def metric_spec(self, *, with_answers: bool = False) -> MetricSpec:
         """The item's spec as a model, optionally carrying the clarification answers."""
@@ -120,4 +140,4 @@ def load_golden(path: str | Path) -> list[GoldenItem]:
     return items
 
 
-__all__ = ["Expectation", "GoldenItem", "GoldenSet", "GoldenStatus", "load_golden"]
+__all__ = ["Expectation", "GoldenItem", "GoldenKind", "GoldenSet", "GoldenStatus", "load_golden"]

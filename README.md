@@ -45,12 +45,12 @@ src/understory/
   warehouse/   Warehouse: duckdb, bigquery
   guard/       sqlglot read-only SQL guard for run_sql
   telemetry/   write-only Parquet log in three families (events, text, gaps), HMAC user hashing
-  harness/     Pydantic AI agent over OpenRouter, golden sets, eval runner
+  harness/     Pydantic AI agent over OpenRouter, trap and realistic sets, eval runner, realistic-set drafting
 dbt_understory/  dbt package modeling the log: fct_questions, fct_sessions, mart_eval_daily, ...
 tenants/         one directory per client; four fake_companies tenants committed
 ```
 
-A tenant is a directory: `tenant.yml`, `context.md`, `traps.yml`, `semantic_manifest.json`, and `golden/`. The fake tenants here are fixtures; a client's tenant lives in their own dbt repository.
+A tenant is a directory: `tenant.yml`, `context.md`, `traps.yml`, `semantic_manifest.json`, and `golden/` with two sets: `questions.yml` (the trap set, guards correctness) and `realistic.yml` (the realistic set, guards adoption). The fake tenants here are fixtures; a client's tenant lives in their own dbt repository.
 
 ## Stack
 
@@ -63,8 +63,16 @@ MVP on the `mvp-scaffold` branch. The server, all seven tools, the telemetry pac
 ```bash
 export OPENROUTER_API_KEY=...
 uv run understory ask --tenant tenants/alpenglow "How were sales in the US in March 2025?"
-uv run understory eval --tenant tenants/alpenglow --deterministic     # no LLM, runs in CI
+uv run understory eval --tenant tenants/alpenglow --deterministic     # trap set, no LLM, runs in CI
 uv run understory eval --tenant tenants/alpenglow                     # live, writes tenants/alpenglow/.evals/
+uv run understory eval --tenant tenants/alpenglow --set realistic --deterministic
+```
+
+The realistic set is drafted, not written from scratch. `draft-realistic` reads the seeded ground truth in the warehouse and writes template questions with correct specs; someone rewrites the wording and adds over-refusal items; `fill` runs every spec once and records the numbers as a snapshot with `verified: false`.
+
+```bash
+uv run understory draft-realistic --tenant tenants/alpenglow          # writes golden/realistic.yml from meta.ground_truth
+uv run understory fill --tenant tenants/alpenglow                     # snapshots numbers into the file, in place
 ```
 
 ## Related

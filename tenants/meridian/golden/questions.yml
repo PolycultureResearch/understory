@@ -140,3 +140,34 @@ questions:
       status: resolved
       metrics: [win_rate]
       numbers: [0.0699]
+
+  - id: leads_by_source_role_kept_2024_q3
+    question: "Leads by source for Q3 2024"
+    notes: >
+      Dimension role bounded by the metric. 'source' prefers the won deal's
+      source, which leads do not carry. The deal's source stays and the
+      disclosure says why.
+    spec:
+      metrics: [leads]
+      group_by: [deal__source]
+      time: {start: 2024-07-01, end: 2024-09-30}
+    expected:
+      status: resolved
+      metrics: [leads]
+      disclosures: ["does not carry won_deal__source"]
+      numbers: [1041.0, 1190.0, 351.0, 662.0]
+
+  - id: sales_cycle_covered_2025_04_07
+    question: "Are deals taking longer to close? Sales cycle by month, April through July 2025."
+    notes: >
+      Covered by the spec's own metric. 'sales' is the revenue ask's phrase and
+      'deals' the deals prefer's, but the spec names Sales Cycle Days, which
+      neither trap governs. No ask, no swap, no disclosure.
+    spec:
+      metrics: [sales_cycle_days]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-04-01, end: 2025-07-31}
+    expected:
+      status: resolved
+      metrics: [sales_cycle_days]
+      numbers: [46.32, 39.38, 43.36, 35.34]

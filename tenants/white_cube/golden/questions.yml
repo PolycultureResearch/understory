@@ -144,3 +144,35 @@ questions:
       status: resolved
       metrics: [trial_conversion_rate]
       numbers: [0.2161]
+
+  - id: churn_professional_plan_2026_05
+    question: "What did churn look like on the professional plan in May 2026?"
+    notes: >
+      Dimension role bounded by a where clause. 'plan' prefers the subscription
+      day's plan, which churned MRR does not carry; the movement's plan stays.
+      'churn' still prefers churned MRR, which the spec already names.
+    spec:
+      metrics: [churned_mrr]
+      where:
+        - {dimension: mrr_movement__plan, op: eq, values: [professional]}
+      time: {start: 2026-05-01, end: 2026-05-31}
+    expected:
+      status: resolved
+      metrics: [churned_mrr]
+      disclosures: ["does not carry subscription_day__plan", "churned mrr"]
+      numbers: [3567.0]
+
+  - id: net_new_mrr_as_named_2025_q1
+    question: "What's our net new MRR for Q1 2025? Not total MRR, the movement."
+    notes: >
+      Names the non-preferred candidate and mentions the preferred one. The
+      collision leaves net new MRR in place and the disclosure says it was
+      read as named, not that it was read as MRR.
+    spec:
+      metrics: [net_new_mrr]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_new_mrr]
+      disclosures: ["net new mrr, as named"]
+      numbers: [8606.17]
