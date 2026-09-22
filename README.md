@@ -72,6 +72,15 @@ uv run understory eval --tenant tenants/alpenglow --set realistic --tiers --byo 
 
 The realistic set's report leads with first-turn answer rate and over-refusal rate, broken down by item kind (`event`, `quiet`, `over_refusal`, `fault`). `--byo` runs the agent on the connector instructions and tool descriptions alone, which is what a client's chatbot sees; its numbers are the floor and the default mode's the ceiling.
 
+A client's trap set starts drafted too. `draft-golden` writes one canonical item per metric and per metric-by-dimension from the catalog, and one item per trap from the registry; `verify` marks the snapshots a person has checked against a known report; the `golden-interview` skill turns an hour with the data owner into the items neither can know.
+
+```bash
+uv run understory draft-golden --tenant tenants/alpenglow --append         # add what golden/questions.yml lacks
+uv run understory fill --tenant tenants/alpenglow --set trap
+uv run understory verify --tenant tenants/alpenglow --list                 # the numbers still to check
+uv run understory verify --tenant tenants/alpenglow net_revenue_2026_05    # a person checked it
+```
+
 The realistic set is drafted, not written from scratch. `draft-realistic` reads the seeded ground truth in the warehouse and writes template questions with correct specs; someone rewrites the wording and adds over-refusal items; `fill` runs every spec once and records the numbers as a snapshot with `verified: false`.
 
 ```bash

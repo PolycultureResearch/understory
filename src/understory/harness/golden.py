@@ -49,8 +49,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from understory.types import MetricSpec
 
 GoldenStatus = Literal["resolved", "needs_clarification", "unanswerable", "invalid"]
-GoldenKind = Literal["trap", "event", "quiet", "over_refusal", "fault"]
-"""What an item is for. Trap items guard a declared trap or refusal path. The
+GoldenKind = Literal["trap", "catalog", "event", "quiet", "over_refusal", "fault"]
+"""What an item is for. Trap items guard a declared trap or refusal path; catalog
+items are one canonical question per metric, drafted by `understory draft-golden`. The
 realistic set's kinds: `event` asks about a month where the seeded ground truth
 put something, `quiet` about a month where nothing happened, `over_refusal` is
 an answerable question that looks risky, `fault` a month with a data-quality

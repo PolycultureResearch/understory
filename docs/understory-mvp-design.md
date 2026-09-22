@@ -350,7 +350,7 @@ Every engagement ships trap and realistic sets for the client, written with the 
 3. Real questions from a help channel export or a one-hour interview with the data owner.
 4. Gaps promoted from the backlog (section 10.4).
 
-A command drafts (1) and (2) from the tenant directory. A skill runs the (3) interview and turns the transcript into draft items. The data owner verifies the twenty numbers that matter.
+`understory draft-golden` drafts (1) and (2) from the tenant directory into `golden/questions.yml`, or appends the items a hand-written file lacks. Every template is run through the traps check first, so a metric whose own name is an `ask` phrase is drafted as the ask it will get, and a cumulative metric as the weekly series MetricFlow needs. `understory fill` snapshots the numbers. The `golden-interview` skill (`.claude/skills/golden-interview`) runs the (3) interview and turns the transcript into items in the same shape. `understory verify` marks the items the data owner has checked against a known report, which is the twenty numbers that matter, and `verify --list` prints the ones still waiting.
 
 ### 10.4 Gap promotion
 
@@ -435,7 +435,7 @@ Draft 0.2's steps 1 through 6 are built: catalog and discovery, governed query, 
 2. Policy flip. `prefer` as the norm, `why` required on `ask` and enforced by the registry check, default window as a preferred tenant setting, the four fake tenants and their trap sets rewritten to match.
 3. Gaps. Required `question` and `reason` on `run_sql`, the fallback disclosure, gap records keyed on what was missing, the `gaps` family, `mart_semantic_backlog` over it, abandonment in the eval report.
 4. Realistic set. Generator from seeded ground truth with hand-edited wording, corruption faults in the matrix, over-refusal class, BYO mode, two-model scoring. Drafted 2026-09-14: 85 items across the four tenants with event, quiet and over-refusal kinds, the drafter and the fill command; the prefer-versus-where bug the set exposed is fixed and covered by trap-set items. Closed 2026-09-21: first-turn answer rate and over-refusal rate with a by-kind table in the report, `--byo` mode over the shared connector surfaces, `--tiers` two-model scoring with a comparison table, the volume check in `query_metrics`, and four `fault` items on the two tenants whose marts show a dropout (89 items). Both sets pass deterministically on all four tenants. Notes in `knowledge/step4-close-2026-09-21.md`.
-5. Golden authoring. Draft command from catalog and traps, the data-owner interview skill, snapshot approval with the `verified` flag.
+5. Golden authoring. Draft command from catalog and traps, the data-owner interview skill, snapshot approval with the `verified` flag. Done 2026-09-22: `draft-golden` (traps-aware, fills without a mismatch and passes 100% on all four fake tenants), `verify`, and the `golden-interview` skill.
 6. External tenant mount. Read a tenant directory from a client repository, docs and README for that layout.
 7. Gap promotion command.
 8. Real users. Friendly stakeholders on a fake tenant through Claude.ai over a tunnel, then Northern Nights on their own data, then a larger company.

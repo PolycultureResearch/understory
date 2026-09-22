@@ -5,9 +5,11 @@ printed so you can see which tools it reached for and what they said. `eval`
 runs a tenant's golden set, prints the summary table and writes the JSON report
 under `<tenant>/.evals/`.
 
-`draft-realistic` and `fill` build the realistic set without a model:
-`draft-realistic` writes template questions from the seeded ground truth,
-`fill` runs every spec through the service once and records the numbers it saw.
+`draft-realistic`, `draft-golden`, `fill` and `verify` build the golden sets
+without a model: `draft-realistic` writes template questions from the seeded
+ground truth, `draft-golden` writes them from the catalog and the traps
+registry, `fill` runs every spec through the service once and records the
+numbers it saw, and `verify` marks the snapshots a person has checked.
 
 `eval` spends money, so it reads the key's remaining credit first and refuses a
 set the balance cannot cover, prints the running total after each item, and
@@ -220,6 +222,91 @@ def draft_realistic_command(
     write_items(target, items, header=header)
     rate = sum(1 for e in events if e.kind == "rate")
     typer.echo(f"{cfg.name}: {len(items)} items from {rate} rate events -> {target}")
+
+
+@app.command("draft-golden")
+def draft_golden_command(
+    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    out: Path = typer.Option(
+        None, "--out", "-o", help="Where to write. Default golden/questions.yml."
+    ),
+    append: bool = typer.Option(
+        False, "--append", help="Add items with new ids to an existing file; keep the rest."
+    ),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing file."),
+    by_dimension: bool = typer.Option(
+        True, help="Also draft one item per metric grouped by its first categorical dimension."
+    ),
+) -> None:
+    """Draft a trap set from the catalog and the traps registry. No model, no numbers."""
+    from understory.harness.authoring import append_items, draft_golden
+    from understory.harness.realistic import data_window, write_items
+    from understory.server.service import Service
+    from understory.tenant import load_tenant
+
+    cfg = load_tenant(tenant)
+    target = out or cfg.golden_path
+    if target.exists() and not (append or overwrite):
+        typer.echo(f"{target} exists; pass --append to add to it or --overwrite to replace it")
+        raise typer.Exit(1)
+    service = Service(cfg)
+    try:
+        window = data_window(service.catalog, service.warehouse)
+        items = draft_golden(
+            service.catalog, service.registry, window=window, by_dimension=by_dimension
+        )
+    finally:
+        service.close()
+    if target.exists() and append:
+        added = append_items(target, items)
+        typer.echo(f"{cfg.name}: {len(added)} of {len(items)} drafted items were new -> {target}")
+        return
+    header = (
+        f"{cfg.display_name} trap set, drafted from the catalog and the traps registry.\n"
+        "Wording is a template until someone rewrites it. Run `understory fill` to\n"
+        "snapshot the numbers, then `understory verify` on the ones a person checked."
+    )
+    write_items(target, items, header=header)
+    catalog = sum(1 for i in items if i.kind == "catalog")
+    typer.echo(f"{cfg.name}: {len(items)} items ({catalog} from the catalog) -> {target}")
+
+
+@app.command("verify")
+def verify_command(
+    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    ids: list[str] = typer.Argument(None, help="Item ids to mark. None with --list to review."),
+    golden_set: str = typer.Option("trap", "--set", "-s", help="'trap' or 'realistic'."),
+    clear: bool = typer.Option(False, "--clear", help="Clear the flag instead of setting it."),
+    list_items: bool = typer.Option(
+        False, "--list", help="Print the unverified items with their numbers, and stop."
+    ),
+) -> None:
+    """Mark snapshots a person has checked against a known report."""
+    from understory.harness.authoring import set_verified
+    from understory.harness.golden import load_golden
+    from understory.tenant import load_tenant
+
+    cfg = load_tenant(tenant)
+    path = cfg.golden_set_path(golden_set)
+    items = load_golden(path)
+    if list_items or not ids:
+        pending = [i for i in items if not i.verified and i.expected.numbers]
+        done = sum(1 for i in items if i.verified)
+        typer.echo(
+            f"{cfg.name} {golden_set}: {done} verified, {len(pending)} with numbers to check"
+        )
+        for i in pending:
+            typer.echo(f"  {i.id}: {i.question}")
+            typer.echo(f"      {i.expected.metrics or ''} {i.expected.numbers}")
+        if not ids:
+            return
+    known = {i.id for i in items}
+    unknown = [i for i in ids if i not in known]
+    if unknown:
+        typer.echo(f"no such items: {unknown}")
+        raise typer.Exit(1)
+    found = set_verified(path, ids, value=not clear)
+    typer.echo(f"{'cleared' if clear else 'verified'} {len(found)}: {', '.join(found)} -> {path}")
 
 
 @app.command("fill")
