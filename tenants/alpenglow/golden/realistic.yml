@@ -39,7 +39,11 @@ questions:
     question: "How did returns look in Q4 2024 compared to Q3?"
     kind: event
     source: ground_truth:jackets_sizing_recall
-    notes: "'returns' prefers the rate; the disclosure names the alternatives."
+    notes: >
+      'returns' prefers the rate; the disclosure names the alternatives. The
+      substring is 'refund', not 'refunds': a model that goes on to query
+      refunds reports "refund value", which names the alternative better than
+      repeating the disclosure would.
     spec:
       metrics: [return_rate]
       group_by: [metric_time]
@@ -47,7 +51,7 @@ questions:
     expected:
       status: resolved
       metrics: [return_rate]
-      disclosures: ["return rate", "refunds"]
+      disclosures: ["return rate", "refund"]
       numbers: [0.0626, 0.0567]
 
   - id: refunds_jackets_by_month_2024_q4

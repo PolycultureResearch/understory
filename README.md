@@ -70,7 +70,12 @@ uv run understory eval --tenant tenants/alpenglow --set realistic --tiers       
 uv run understory eval --tenant tenants/alpenglow --set realistic --tiers --byo  # connector surfaces only
 ```
 
-The realistic set's report leads with first-turn answer rate and over-refusal rate, broken down by item kind (`event`, `quiet`, `over_refusal`, `fault`). `--byo` runs the agent on the connector instructions and tool descriptions alone, which is what a client's chatbot sees; its numbers are the floor and the default mode's the ceiling.
+The realistic set's report leads with first-turn answer rate and over-refusal rate, broken down by item kind (`event`, `quiet`, `over_refusal`, `fault`). `--byo` runs the agent on the connector instructions and tool descriptions alone, which is what a client's chatbot sees. The harness runs the closing `log_answer` check itself when the model forgets (`--no-enforce-check` turns that off) and its system prompt is a variable (`--prompt harness|lean`). To measure a prompt change, pick the items that carry the variance and repeat them:
+
+```bash
+uv run understory eval --tenant tenants/alpenglow --set realistic --repeat 5 \
+  --id sales_by_month_2025_q1 --id refunds_why_2024_10 --prompt lean
+```
 
 A client's trap set starts drafted too. `draft-golden` writes one canonical item per metric and per metric-by-dimension from the catalog, and one item per trap from the registry; `verify` marks the snapshots a person has checked against a known report; the `golden-interview` skill turns an hour with the data owner into the items neither can know.
 

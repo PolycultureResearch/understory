@@ -23,7 +23,10 @@ down by the item's `kind`, so a prompt change that makes the model timid shows
 up on the over_refusal items before it shows up anywhere else.
 
 `mode` is `agent` for the harness prompt, `byo` for the connector surfaces only
-(`agent.build_agent`), and `deterministic` for no model at all.
+(`agent.build_agent`), and `deterministic` for no model at all. `prompt` and
+`enforce_check` name the harness variant (the ablation axes), and `repeat`
+runs every item that many times so a report can show pass counts per item
+rather than one coin flip each.
 
 `run_evals` drives the real agent. `deterministic.run_deterministic` drives the
 same golden set straight through `Service.query_metrics` with no model, and
@@ -138,15 +141,29 @@ class ItemScore(BaseModel):
     """HTTP status of a provider error, when it had one. 402 means out of credits."""
     skipped: bool = False
     """True when the run stopped before this item, so nothing was measured."""
+    run: int = 1
+    """Which repeat this score came from, 1-based."""
 
 
 class EvalReport(BaseModel):
     tenant: str
     mode: EvalMode
     model: str
+    prompt: str = "harness"
+    """Which system prompt the harness ran (`agent.PROMPTS`). Meaningless for byo."""
+    enforce_check: bool = False
+    """Whether the harness ran the closing check itself when the model did not."""
+    repeat: int = 1
     started_at: datetime
     finished_at: datetime
     items: list[ItemScore] = Field(default_factory=list)
+
+    @property
+    def label(self) -> str:
+        """`agent/harness+check`, `byo`, `deterministic`: the variant, for tables."""
+        if self.mode != "agent":
+            return self.mode
+        return f"agent/{self.prompt}{'+check' if self.enforce_check else ''}"
 
     def summary(self) -> dict[str, Any]:
         n = len(self.items)
@@ -154,6 +171,8 @@ class EvalReport(BaseModel):
             "tenant": self.tenant,
             "mode": self.mode,
             "model": self.model,
+            "variant": self.label,
+            "repeat": self.repeat,
             "items": n,
             "passed": sum(1 for i in self.items if i.passed),
             "pass_rate": _rate([i.passed for i in self.items]),
@@ -171,6 +190,8 @@ class EvalReport(BaseModel):
         out["over_refusal_n"] = len(refusable)
         if any(i.kind for i in self.items):
             out["by_kind"] = self.by_kind()
+        if self.repeat > 1:
+            out["by_item"] = self.by_item()
         asked = [i for i in self.items if i.clarifications]
         out["asks_returned"] = len(asked)
         out["asks_resolved"] = sum(1 for i in asked if i.clarification_resolved)
@@ -208,6 +229,26 @@ class EvalReport(BaseModel):
             }
         return out
 
+    def by_item(self) -> dict[str, dict[str, Any]]:
+        """Pass counts per golden item across repeats, in first-seen order."""
+        groups: dict[str, list[ItemScore]] = {}
+        for i in self.items:
+            groups.setdefault(i.id, []).append(i)
+        out: dict[str, dict[str, Any]] = {}
+        for item_id, scores in groups.items():
+            reasons: dict[str, int] = {}
+            for s in scores:
+                for r in s.reasons:
+                    key = r.split(":")[0][:60]
+                    reasons[key] = reasons.get(key, 0) + 1
+            out[item_id] = {
+                "runs": len(scores),
+                "passed": sum(1 for s in scores if s.passed),
+                "first_turn_answer": sum(1 for s in scores if s.first_turn_answer),
+                "reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
+            }
+        return out
+
     def usage_summary(self) -> dict[str, Any]:
         """Token and cost totals, plus per item averages over the items that ran.
 
@@ -234,7 +275,8 @@ class EvalReport(BaseModel):
     def markdown(self) -> str:
         s = self.summary()
         head = (
-            f"### {self.tenant} - {self.mode} - {self.model}\n\n"
+            f"### {self.tenant} - {self.label} - {self.model}"
+            f"{f' - x{self.repeat}' if self.repeat > 1 else ''}\n\n"
             f"{s['passed']}/{s['items']} passed"
             f" | first-turn {_pct(s['first_turn_answer_rate'])}"
             f" | over-refusal {_pct(s['over_refusal_rate'])}"
@@ -256,6 +298,16 @@ class EvalReport(BaseModel):
             )
         if "stopped" in s:
             head += f"{s['stopped']}: {', '.join(s['skipped'])}\n\n"
+        if "by_item" in s:
+            head += "| item | passed | first-turn | why not |\n|---|---|---|---|\n"
+            for item_id, k in s["by_item"].items():
+                why = "; ".join(f"{r} x{n}" for r, n in k["reasons"].items())
+                runs = k["runs"]
+                head += (
+                    f"| {item_id} | {k['passed']}/{runs} | {k['first_turn_answer']}/{runs} "
+                    f"| {why.replace('|', '/')[:120]} |\n"
+                )
+            head += "\n"
         if "by_kind" in s:
             head += "| kind | items | passed | first-turn | over-refusal | failures |\n"
             head += "|---|---|---|---|---|---|\n"
@@ -295,7 +347,7 @@ def compare(reports: list[EvalReport]) -> str:
     for r in reports:
         s = r.summary()
         lines.append(
-            f"| {r.model} | {r.mode} | {s['passed']}/{s['items']} "
+            f"| {r.model} | {r.label} | {s['passed']}/{s['items']} "
             f"| {_pct(s['first_turn_answer_rate'])} | {_pct(s['over_refusal_rate'])} "
             f"| {_pct(s['disclosure_rate'])} | {_pct(s['capture_rate'])} "
             f"| {_cents(s.get('avg_cost_usd'))} |"
@@ -309,7 +361,7 @@ def write_report(report: EvalReport, tenant_root: Path) -> Path:
     A BYO run carries `-byo` in its name so the two modes sit side by side.
     """
     stamp = report.started_at.strftime("%Y%m%dT%H%M%SZ")
-    suffix = "-byo" if report.mode == "byo" else ""
+    suffix = "" if report.mode == "deterministic" else f"-{_slug(report.label)}"
     name = f"{stamp}-{_slug(report.model)}{suffix}.json"
     out = Path(tenant_root) / ".evals" / name
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -403,11 +455,16 @@ def run_evals(
     force: bool = False,
     echo: Callable[[str], None] | None = None,
     byo: bool = False,
+    prompt: str = "harness",
+    enforce_check: bool | None = None,
+    repeat: int = 1,
 ) -> EvalReport:
     """Run every golden item through the agent and score it.
 
     `byo` runs the connector-surfaces agent (`agent.build_agent`) and reports
-    `mode="byo"`. Its numbers are the floor a client's chatbot should clear.
+    `mode="byo"`. `prompt` and `enforce_check` pick the harness variant.
+    `repeat` runs each item that many times, in item order, so the report
+    can count passes per item.
 
     A run against a real model id checks the key's balance first and raises
     `BudgetError` rather than starting a set it cannot pay for. A `Model`
@@ -417,8 +474,11 @@ def run_evals(
     `skipped`, so a half funded run produces a report that says which questions
     were never asked instead of one 402 per remaining item.
     """
+    if enforce_check is None:
+        enforce_check = not byo
+    runs = [(item, n) for n in range(1, repeat + 1) for item in items]
     if isinstance(model, str):
-        check_budget(len(items), api_key=api_key, per_item=budget_per_item, force=force, echo=echo)
+        check_budget(len(runs), api_key=api_key, per_item=budget_per_item, force=force, echo=echo)
 
     started = datetime.now(UTC)
     name = model_id(model)
@@ -426,11 +486,21 @@ def run_evals(
     lock = threading.Lock()
     spent = 0.0
 
-    def one(item: GoldenItem) -> ItemScore:
+    def one(run: tuple[GoldenItem, int]) -> ItemScore:
         nonlocal spent
+        item, n = run
         if stop.is_set():
             return _skipped_score(item)
-        score = _score_agent_item(service, item, model=model, api_key=api_key, byo=byo)
+        score = _score_agent_item(
+            service,
+            item,
+            model=model,
+            api_key=api_key,
+            byo=byo,
+            prompt=prompt,
+            enforce_check=enforce_check,
+            run=n,
+        )
         if _out_of_credits(score):
             stop.set()
         with lock:
@@ -441,14 +511,17 @@ def run_evals(
 
     if concurrency > 1:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            scores = list(pool.map(one, items))
+            scores = list(pool.map(one, runs))
     else:
-        scores = [one(item) for item in items]
+        scores = [one(run) for run in runs]
 
     return EvalReport(
         tenant=service.tenant.name,
         mode="byo" if byo else "agent",
         model=name,
+        prompt=prompt,
+        enforce_check=enforce_check,
+        repeat=repeat,
         started_at=started,
         finished_at=datetime.now(UTC),
         items=scores,
@@ -489,12 +562,16 @@ def _score_agent_item(
     model: str | Model,
     api_key: str | None,
     byo: bool = False,
+    prompt: str = "harness",
+    enforce_check: bool | None = None,
+    run: int = 1,
 ) -> ItemScore:
     t0 = time.monotonic()
     exp = item.expected
-    key = f"eval:{item.id}"
+    key = f"eval:{item.id}:{run}"
+    variant = {"byo": byo, "prompt": prompt, "enforce_check": enforce_check}
     first = run_question(
-        service, item.question, model=model, api_key=api_key, session_key=key, byo=byo
+        service, item.question, model=model, api_key=api_key, session_key=key, **variant
     )
 
     asked = [c.trap for c in first.clarifications]
@@ -507,13 +584,14 @@ def _score_agent_item(
             api_key=api_key,
             session_key=key,
             message_history=first.messages,
-            byo=byo,
+            **variant,
         )
 
     score = ItemScore(
         id=item.id,
         question=item.question,
         kind=item.kind,
+        run=run,
         expected_status=exp.status,
         observed_status=_observed(first, final),
         tool_calls=[c.name for c in final.tool_calls],

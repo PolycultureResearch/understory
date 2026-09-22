@@ -13,8 +13,18 @@ have, so the numbers the harness produces are an upper bound.
 BYO mode (`byo=True`) drops that advantage on purpose. The agent gets the
 connector instructions as its whole system prompt and the MCP tool descriptions
 as its whole tool documentation, which is exactly what a client's chatbot sees
-(`understory.server.surfaces`). Its numbers approximate a real connector and
-are the floor the harness numbers sit above. Design section 9.
+(`understory.server.surfaces`). Its numbers approximate a real connector.
+Design section 9.
+
+The first live run (`knowledge/step4-close-2026-09-21.md`) found the harness
+prompt asking for the closing check and the model skipping it on the long
+answers, while the one-line connector instruction got it every time. So the
+check is now structural: an output validator runs the final reply through
+`log_answer` when the model did not, and sends an unsourced review back for one
+more turn. `enforce_check` turns that on; BYO mode leaves it off because a
+connector has no such hook. `PROMPTS` holds the system prompts under test:
+`harness`, the original ten rules, and `lean`, the connector instructions plus
+the two lines with evidence behind them.
 
 Tests drive the same agent with `pydantic_ai.models.test.TestModel` or
 `FunctionModel`, which is why `model` accepts a `Model` instance as well as an
@@ -37,7 +47,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, Tool
+from pydantic_ai import Agent, ModelRetry, RunContext, Tool
 from pydantic_ai.models import Model
 
 from understory.server.service import Service
@@ -115,6 +125,26 @@ Be brief. Give the number, the window it covers, and the disclosures. No
 preamble about what you are about to do.
 """
 
+LEAN_PROMPT = """\
+{instructions}
+
+Call get_context first. Use list_metrics and describe_metric when you are unsure
+which metric a question means, and search_dimension_values before filtering on a
+value you have not seen. State every required_disclosure from the tool result in
+your answer, in full.
+"""
+"""The connector instructions plus the two lines the first live run supported.
+
+No rule about the closing check: `enforce_check` does that. No rule about
+brevity: it cost a disclosure and two checks. Nothing named that it forbids.
+"""
+
+PROMPTS: dict[str, str] = {"harness": SYSTEM_PROMPT, "lean": LEAN_PROMPT}
+"""System prompts by name, for `understory eval --prompt`."""
+
+STRUCTURAL_CHECK = "structural"
+"""`ToolCallRecord.args["via"]` on a log_answer call the harness made itself."""
+
 
 # --------------------------------------------------------------------------- #
 # What a run produced
@@ -173,6 +203,9 @@ class Trace:
     clarifications: list[ClarificationAsked] = field(default_factory=list)
     required_disclosures: list[str] = field(default_factory=list)
     review: AnswerReview | None = None
+    last_draft: str | None = None
+    """The draft the last log_answer call checked, so the structural check can
+    tell a reply the model already checked from one it did not."""
 
     def record(self, name: str, args: dict[str, Any], status: str) -> None:
         self.calls.append(ToolCallRecord(name=name, args=args, status=status))
@@ -258,6 +291,8 @@ def build_agent(
     api_key: str | None = None,
     trace: Trace | None = None,
     byo: bool = False,
+    prompt: str = "harness",
+    enforce_check: bool | None = None,
 ) -> Agent:
     """An agent over one tenant, with the seven tools bound to one session.
 
@@ -267,8 +302,15 @@ def build_agent(
     `byo` swaps the harness prompt and the tool docstrings for the connector
     instructions and the MCP tool descriptions, and nothing else changes. The
     tool functions, the session and the trace are the same.
+
+    `prompt` names a system prompt in `PROMPTS`; BYO mode ignores it.
+    `enforce_check` runs the final reply through `log_answer` when the model did
+    not, and hands an unsourced review back for one more turn. It defaults to
+    on for the harness and off for BYO.
     """
     tr = trace if trace is not None else Trace()
+    if enforce_check is None:
+        enforce_check = not byo
 
     def get_context() -> str:
         """Business context for this company.
@@ -388,6 +430,7 @@ def build_agent(
         """
         review = service.log_answer(session, draft)
         tr.review = review
+        tr.last_draft = draft
         tr.record("log_answer", {"chars": len(draft)}, review.status)
         return review.model_dump(mode="json")
 
@@ -408,11 +451,44 @@ def build_agent(
         for fn in functions:
             fn.__doc__ = None
             tools.append(Tool(fn, description=TOOL_DESCRIPTIONS[fn.__name__]))
-        prompt = connector_instructions(service.tenant)
+        system = connector_instructions(service.tenant)
     else:
         tools = functions
-        prompt = SYSTEM_PROMPT.format(display_name=service.tenant.display_name)
-    return Agent(resolve_model(model, api_key), system_prompt=prompt, tools=tools, retries=2)
+        if prompt not in PROMPTS:
+            raise ValueError(f"unknown prompt {prompt!r}; one of {sorted(PROMPTS)}")
+        system = PROMPTS[prompt].format(
+            display_name=service.tenant.display_name,
+            instructions=connector_instructions(service.tenant).strip(),
+        )
+    agent: Agent = Agent(
+        resolve_model(model, api_key), system_prompt=system, tools=tools, retries=2
+    )
+
+    if enforce_check:
+
+        @agent.output_validator
+        def checked(ctx: RunContext[None], output: str) -> str:
+            """The closing step, whether or not the model took it.
+
+            A reply the model already ran through log_answer as its last draft
+            passes straight through. Any other reply is checked here; one with
+            unsourced numbers goes back to the model with the review, once.
+            """
+            if tr.review is not None and tr.last_draft == output:
+                return output
+            review = service.log_answer(session, output)
+            tr.review = review
+            tr.last_draft = output
+            tr.record("log_answer", {"chars": len(output), "via": STRUCTURAL_CHECK}, review.status)
+            if review.status == "unsourced_numbers":
+                unsourced = ", ".join(n.number for n in review.unsourced)
+                raise ModelRetry(
+                    f"These numbers in your reply did not come from any tool result this "
+                    f"session saw: {unsourced}. {review.how_to_read}"
+                )
+            return output
+
+    return agent
 
 
 def run_question(
@@ -425,11 +501,12 @@ def run_question(
     clarification_answers: dict[str, str] | None = None,
     message_history: list[Any] | None = None,
     byo: bool = False,
+    prompt: str = "harness",
+    enforce_check: bool | None = None,
 ) -> Turn:
     """Ask one question and return everything the evals need to score it.
 
-    `byo` runs the connector-surfaces agent instead of the harness one; see
-    `build_agent`.
+    `byo`, `prompt` and `enforce_check` are passed to `build_agent`.
 
     `message_history` is the previous turn's `Turn.messages`. Pass it and the
     question becomes the next user message of the same conversation, so the
@@ -447,7 +524,16 @@ def run_question(
     """
     session = service.sessions.get(session_key or f"harness:{id(service)}")
     trace = Trace()
-    agent = build_agent(service, session, model=model, api_key=api_key, trace=trace, byo=byo)
+    agent = build_agent(
+        service,
+        session,
+        model=model,
+        api_key=api_key,
+        trace=trace,
+        byo=byo,
+        prompt=prompt,
+        enforce_check=enforce_check,
+    )
 
     prompt = question
     if clarification_answers:
@@ -578,6 +664,9 @@ __all__ = [
     "CACHE_TTL",
     "CHEAP_MODEL",
     "DEFAULT_MODEL",
+    "LEAN_PROMPT",
+    "PROMPTS",
+    "STRUCTURAL_CHECK",
     "SYSTEM_PROMPT",
     "TIERS",
     "USAGE_KEYS",
