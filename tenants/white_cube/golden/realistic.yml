@@ -140,8 +140,8 @@ questions:
     kind: event
     source: ground_truth:mobile_signup_cta_regression
     notes: >
-      A count, not the rate. The visit-to-signup rate filtered by device comes
-      back as 1.0 from the semantic layer, so the rate is not asked here.
+      A count. The rate filtered by session device is
+      visit_signup_rate_mobile_2026_01_02.
     spec:
       metrics: [signups]
       group_by: [metric_time]
@@ -374,3 +374,22 @@ questions:
       status: resolved
       metrics: [expansion_mrr]
       numbers: [510.0, 243.67, 252.17, 362.67, 246.5, 736.67, 153.0, 742.33, 365.5, 640.33, 325.83, 345.67]
+
+  - id: visit_signup_rate_mobile_2026_01_02
+    question: "Visit-to-signup rate on mobile for January and February 2026"
+    kind: over_refusal
+    source: hand
+    notes: >
+      Filtered through the session's own device. Before fake_companies made
+      the ratio single-model this came back as 1.0 when filtered through the
+      user entity, and the realistic set carried a count instead.
+    spec:
+      metrics: [visit_signup_rate]
+      group_by: [metric_time]
+      where:
+        - {dimension: session__device, op: eq, values: [mobile]}
+      time: {grain: month, start: 2026-01-01, end: 2026-02-28}
+    expected:
+      status: resolved
+      metrics: [visit_signup_rate]
+      numbers: [0.0357, 0.0301]
