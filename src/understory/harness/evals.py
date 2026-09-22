@@ -82,7 +82,7 @@ _SUFFIX_SCALE = {
 
 METRIC_NAMES = ("coverage", "resolution", "answer", "disclosure", "capture", "clean")
 
-KIND_ORDER = ("event", "quiet", "over_refusal", "fault", "trap")
+KIND_ORDER = ("event", "quiet", "over_refusal", "fault", "trap", "catalog")
 """Report order for the by-kind table. Unknown kinds follow, alphabetically."""
 
 EvalMode = Literal["agent", "byo", "deterministic"]

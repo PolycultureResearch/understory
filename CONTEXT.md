@@ -106,5 +106,5 @@ Golden questions per tenant weighted toward what stakeholders actually ask, part
 _Avoid_: adoption set, generated set
 
 **Snapshot**:
-Expected numbers taken by running Understory once, recorded with `verified: false`. Guards regression, not truth; a human sets `verified` after checking against a known report.
+Expected numbers taken by running Understory once, recorded with `verified: false`. Guards regression, not truth; a human sets `verified` (`understory verify`) after checking against a known report.
 _Avoid_: golden numbers (they are not gold until verified)
