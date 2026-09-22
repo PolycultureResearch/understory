@@ -52,6 +52,13 @@ class Warehouse(Protocol):
         """MAX(column) on the relation, or None when the relation is empty."""
         ...
 
+    def daily_counts(self, relation: str, column: str) -> list[tuple[date, int]]:
+        """Row count per calendar day of `column`, ascending, nulls left out.
+
+        Feeds the volume check. One scan per call; the service caches it.
+        """
+        ...
+
     def dimension_values(self, relation: str, column: str, query: str, limit: int) -> Result:
         """Distinct values of `column` matching `query` (case-insensitive contains), with counts."""
         ...

@@ -14,6 +14,17 @@ is only counted on the items it applies to, so a tenant whose golden set has one
 
 An item passes overall when every metric that applies to it passes.
 
+The realistic set adds two rates on top (design 10.5). First-turn answer rate
+is the headline adoption number: the share of answerable items whose first turn
+came back with the right numbers and disclosures and no ask in between. An item
+that is correct only after a clarification counts against it, on purpose. Over-
+refusal rate is the share of answerable items that ended refused. Both break
+down by the item's `kind`, so a prompt change that makes the model timid shows
+up on the over_refusal items before it shows up anywhere else.
+
+`mode` is `agent` for the harness prompt, `byo` for the connector surfaces only
+(`agent.build_agent`), and `deterministic` for no model at all.
+
 `run_evals` drives the real agent. `deterministic.run_deterministic` drives the
 same golden set straight through `Service.query_metrics` with no model, and
 returns the same `EvalReport`, so CI can run without an API key.
@@ -71,6 +82,11 @@ _SUFFIX_SCALE = {
 
 METRIC_NAMES = ("coverage", "resolution", "answer", "disclosure", "capture", "clean")
 
+KIND_ORDER = ("event", "quiet", "over_refusal", "fault", "trap")
+"""Report order for the by-kind table. Unknown kinds follow, alphabetically."""
+
+EvalMode = Literal["agent", "byo", "deterministic"]
+
 
 # --------------------------------------------------------------------------- #
 # Report
@@ -97,6 +113,15 @@ class ItemScore(BaseModel):
 
     None means the metric does not apply to this item."""
 
+    kind: str | None = None
+    """The golden item's kind, so the report can break the headline down."""
+    first_turn_answer: bool | None = None
+    """The headline: the first turn answered with the right numbers and disclosures
+    and no ask in between. None when a correct run refuses, so it does not apply."""
+    refused: bool | None = None
+    """An answerable item that ended with no answer: a refusal, or nothing resolved.
+    None when a correct run refuses."""
+
     tool_calls: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     clarifications: list[str] = Field(default_factory=list)
@@ -117,7 +142,7 @@ class ItemScore(BaseModel):
 
 class EvalReport(BaseModel):
     tenant: str
-    mode: Literal["agent", "deterministic"]
+    mode: EvalMode
     model: str
     started_at: datetime
     finished_at: datetime
@@ -138,6 +163,14 @@ class EvalReport(BaseModel):
             values = [v for v in (getattr(i, name) for i in self.items) if v is not None]
             out[f"{name}_rate"] = _rate(values)
             out[f"{name}_n"] = len(values)
+        answerable = [i for i in self.items if i.first_turn_answer is not None]
+        out["first_turn_answer_rate"] = _rate([bool(i.first_turn_answer) for i in answerable])
+        out["first_turn_answer_n"] = len(answerable)
+        refusable = [i for i in self.items if i.refused is not None]
+        out["over_refusal_rate"] = _rate([bool(i.refused) for i in refusable])
+        out["over_refusal_n"] = len(refusable)
+        if any(i.kind for i in self.items):
+            out["by_kind"] = self.by_kind()
         asked = [i for i in self.items if i.clarifications]
         out["asks_returned"] = len(asked)
         out["asks_resolved"] = sum(1 for i in asked if i.clarification_resolved)
@@ -150,6 +183,29 @@ class EvalReport(BaseModel):
             out["skipped"] = skipped
             out["stopped"] = STOPPED_REASON
         out["failures"] = [i.id for i in self.items if not i.passed]
+        return out
+
+    def by_kind(self) -> dict[str, dict[str, Any]]:
+        """The headline rates per item kind, in `KIND_ORDER`. Kindless items are `unkinded`."""
+        groups: dict[str, list[ItemScore]] = {}
+        for i in self.items:
+            groups.setdefault(i.kind or "unkinded", []).append(i)
+        order = [k for k in KIND_ORDER if k in groups] + sorted(
+            k for k in groups if k not in KIND_ORDER
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for kind in order:
+            items = groups[kind]
+            answerable = [i for i in items if i.first_turn_answer is not None]
+            refusable = [i for i in items if i.refused is not None]
+            out[kind] = {
+                "items": len(items),
+                "passed": sum(1 for i in items if i.passed),
+                "pass_rate": _rate([i.passed for i in items]),
+                "first_turn_answer_rate": _rate([bool(i.first_turn_answer) for i in answerable]),
+                "over_refusal_rate": _rate([bool(i.refused) for i in refusable]),
+                "failures": [i.id for i in items if not i.passed],
+            }
         return out
 
     def usage_summary(self) -> dict[str, Any]:
@@ -180,6 +236,8 @@ class EvalReport(BaseModel):
         head = (
             f"### {self.tenant} - {self.mode} - {self.model}\n\n"
             f"{s['passed']}/{s['items']} passed"
+            f" | first-turn {_pct(s['first_turn_answer_rate'])}"
+            f" | over-refusal {_pct(s['over_refusal_rate'])}"
             f" | coverage {_pct(s['coverage_rate'])}"
             f" | resolution {_pct(s['resolution_rate'])}"
             f" | answer {_pct(s['answer_rate'])}"
@@ -198,6 +256,16 @@ class EvalReport(BaseModel):
             )
         if "stopped" in s:
             head += f"{s['stopped']}: {', '.join(s['skipped'])}\n\n"
+        if "by_kind" in s:
+            head += "| kind | items | passed | first-turn | over-refusal | failures |\n"
+            head += "|---|---|---|---|---|---|\n"
+            for kind, k in s["by_kind"].items():
+                head += (
+                    f"| {kind} | {k['items']} | {k['passed']} "
+                    f"| {_pct(k['first_turn_answer_rate'])} | {_pct(k['over_refusal_rate'])} "
+                    f"| {', '.join(k['failures'])} |\n"
+                )
+            head += "\n"
         rows = [
             "| item | expected | observed | cov | res | ans | dis | cap | cln | ok | cents | why |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|",
@@ -214,10 +282,35 @@ class EvalReport(BaseModel):
         return head + "\n".join(rows) + "\n"
 
 
+def compare(reports: list[EvalReport]) -> str:
+    """One markdown table across runs of the same set: the floor and the recommended tier.
+
+    Rows are in the order given. The realistic set is scored on two models per
+    run so the report can publish both (design 10.1).
+    """
+    lines = [
+        "| model | mode | passed | first-turn | over-refusal | disclosure | capture | cents/item |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in reports:
+        s = r.summary()
+        lines.append(
+            f"| {r.model} | {r.mode} | {s['passed']}/{s['items']} "
+            f"| {_pct(s['first_turn_answer_rate'])} | {_pct(s['over_refusal_rate'])} "
+            f"| {_pct(s['disclosure_rate'])} | {_pct(s['capture_rate'])} "
+            f"| {_cents(s.get('avg_cost_usd'))} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def write_report(report: EvalReport, tenant_root: Path) -> Path:
-    """Write the JSON report under `<tenant>/.evals/`. Returns the path."""
+    """Write the JSON report under `<tenant>/.evals/`. Returns the path.
+
+    A BYO run carries `-byo` in its name so the two modes sit side by side.
+    """
     stamp = report.started_at.strftime("%Y%m%dT%H%M%SZ")
-    name = f"{stamp}-{_slug(report.model)}.json"
+    suffix = "-byo" if report.mode == "byo" else ""
+    name = f"{stamp}-{_slug(report.model)}{suffix}.json"
     out = Path(tenant_root) / ".evals" / name
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report.model_dump_json(indent=2))
@@ -309,8 +402,12 @@ def run_evals(
     budget_per_item: float = BUDGET_PER_ITEM,
     force: bool = False,
     echo: Callable[[str], None] | None = None,
+    byo: bool = False,
 ) -> EvalReport:
     """Run every golden item through the agent and score it.
+
+    `byo` runs the connector-surfaces agent (`agent.build_agent`) and reports
+    `mode="byo"`. Its numbers are the floor a client's chatbot should clear.
 
     A run against a real model id checks the key's balance first and raises
     `BudgetError` rather than starting a set it cannot pay for. A `Model`
@@ -333,7 +430,7 @@ def run_evals(
         nonlocal spent
         if stop.is_set():
             return _skipped_score(item)
-        score = _score_agent_item(service, item, model=model, api_key=api_key)
+        score = _score_agent_item(service, item, model=model, api_key=api_key, byo=byo)
         if _out_of_credits(score):
             stop.set()
         with lock:
@@ -350,7 +447,7 @@ def run_evals(
 
     return EvalReport(
         tenant=service.tenant.name,
-        mode="agent",
+        mode="byo" if byo else "agent",
         model=name,
         started_at=started,
         finished_at=datetime.now(UTC),
@@ -391,11 +488,14 @@ def _score_agent_item(
     *,
     model: str | Model,
     api_key: str | None,
+    byo: bool = False,
 ) -> ItemScore:
     t0 = time.monotonic()
     exp = item.expected
     key = f"eval:{item.id}"
-    first = run_question(service, item.question, model=model, api_key=api_key, session_key=key)
+    first = run_question(
+        service, item.question, model=model, api_key=api_key, session_key=key, byo=byo
+    )
 
     asked = [c.trap for c in first.clarifications]
     final = first
@@ -407,11 +507,13 @@ def _score_agent_item(
             api_key=api_key,
             session_key=key,
             message_history=first.messages,
+            byo=byo,
         )
 
     score = ItemScore(
         id=item.id,
         question=item.question,
+        kind=item.kind,
         expected_status=exp.status,
         observed_status=_observed(first, final),
         tool_calls=[c.name for c in final.tool_calls],
@@ -491,6 +593,18 @@ def _score_agent_item(
     score.capture = any(c.name == "log_answer" for c in final.tool_calls)
     if not score.capture:
         reasons.append("log_answer never called")
+
+    # The realistic set's two rates, on items a correct run answers.
+    if exp.resolves:
+        first_resolved = not asked and "resolved" in first.statuses
+        score.first_turn_answer = bool(
+            first_resolved
+            and not score.error
+            and score.answer is not False
+            and score.disclosure is not False
+            and score.clean is not False
+        )
+        score.refused = bool(not score.error and not asked and "resolved" not in final.statuses)
 
     score.reasons = reasons
     score.passed = _passed(score)
@@ -637,13 +751,16 @@ def _slug(text: str) -> str:
 __all__ = [
     "BUDGET_PER_ITEM",
     "KEY_URL",
+    "KIND_ORDER",
     "METRIC_NAMES",
     "STOPPED_REASON",
     "TOLERANCE",
     "BudgetError",
+    "EvalMode",
     "EvalReport",
     "ItemScore",
     "check_budget",
+    "compare",
     "key_status",
     "numbers_missing",
     "run_evals",

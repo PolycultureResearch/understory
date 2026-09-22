@@ -10,6 +10,12 @@ calls `get_context` first, and it always calls `log_answer` with its draft
 before replying. Those are the two habits a hosted chatbot does not reliably
 have, so the numbers the harness produces are an upper bound.
 
+BYO mode (`byo=True`) drops that advantage on purpose. The agent gets the
+connector instructions as its whole system prompt and the MCP tool descriptions
+as its whole tool documentation, which is exactly what a client's chatbot sees
+(`understory.server.surfaces`). Its numbers approximate a real connector and
+are the floor the harness numbers sit above. Design section 9.
+
 Tests drive the same agent with `pydantic_ai.models.test.TestModel` or
 `FunctionModel`, which is why `model` accepts a `Model` instance as well as an
 OpenRouter model id.
@@ -31,15 +37,23 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, Tool
 from pydantic_ai.models import Model
 
 from understory.server.service import Service
 from understory.server.session import Session
+from understory.server.surfaces import TOOL_DESCRIPTIONS, connector_instructions
 from understory.types import AnswerReview, MetricSpec, Status, ToolResponse
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-5"
 """OpenRouter model id the evals pin by default. Chosen for cost per run."""
+
+CHEAP_MODEL = "anthropic/claude-haiku-4.5"
+"""The cheap tier the realistic set is also scored on, so a report can publish a
+floor (this) and a recommended tier (the default). Half the default's price."""
+
+TIERS = (DEFAULT_MODEL, CHEAP_MODEL)
+"""The two models `understory eval --tiers` runs, in report order."""
 
 CACHE_TTL: Literal["5m", "1h"] = "5m"
 """Time to live for every cache breakpoint. Anthropic accepts `5m` or `1h`.
@@ -243,11 +257,16 @@ def build_agent(
     model: str | Model,
     api_key: str | None = None,
     trace: Trace | None = None,
+    byo: bool = False,
 ) -> Agent:
     """An agent over one tenant, with the seven tools bound to one session.
 
     `trace` collects the tool calls and their statuses. Pass one in to read them
     back after the run; `run_question` does exactly that.
+
+    `byo` swaps the harness prompt and the tool docstrings for the connector
+    instructions and the MCP tool descriptions, and nothing else changes. The
+    tool functions, the session and the trace are the same.
     """
     tr = trace if trace is not None else Trace()
 
@@ -372,20 +391,28 @@ def build_agent(
         tr.record("log_answer", {"chars": len(draft)}, review.status)
         return review.model_dump(mode="json")
 
-    return Agent(
-        resolve_model(model, api_key),
-        system_prompt=SYSTEM_PROMPT.format(display_name=service.tenant.display_name),
-        tools=[
-            get_context,
-            list_metrics,
-            describe_metric,
-            search_dimension_values,
-            query_metrics,
-            run_sql,
-            log_answer,
-        ],
-        retries=2,
-    )
+    functions = [
+        get_context,
+        list_metrics,
+        describe_metric,
+        search_dimension_values,
+        query_metrics,
+        run_sql,
+        log_answer,
+    ]
+    if byo:
+        # The closures are fresh per call, so blanking their docstrings hides the
+        # harness's argument notes from this agent only. The connector never
+        # had them: the MCP schema carries the description and the types.
+        tools: list[Any] = []
+        for fn in functions:
+            fn.__doc__ = None
+            tools.append(Tool(fn, description=TOOL_DESCRIPTIONS[fn.__name__]))
+        prompt = connector_instructions(service.tenant)
+    else:
+        tools = functions
+        prompt = SYSTEM_PROMPT.format(display_name=service.tenant.display_name)
+    return Agent(resolve_model(model, api_key), system_prompt=prompt, tools=tools, retries=2)
 
 
 def run_question(
@@ -397,8 +424,12 @@ def run_question(
     session_key: str | None = None,
     clarification_answers: dict[str, str] | None = None,
     message_history: list[Any] | None = None,
+    byo: bool = False,
 ) -> Turn:
     """Ask one question and return everything the evals need to score it.
+
+    `byo` runs the connector-surfaces agent instead of the harness one; see
+    `build_agent`.
 
     `message_history` is the previous turn's `Turn.messages`. Pass it and the
     question becomes the next user message of the same conversation, so the
@@ -416,7 +447,7 @@ def run_question(
     """
     session = service.sessions.get(session_key or f"harness:{id(service)}")
     trace = Trace()
-    agent = build_agent(service, session, model=model, api_key=api_key, trace=trace)
+    agent = build_agent(service, session, model=model, api_key=api_key, trace=trace, byo=byo)
 
     prompt = question
     if clarification_answers:
@@ -545,8 +576,10 @@ def _clip(text: str, n: int) -> str:
 
 __all__ = [
     "CACHE_TTL",
+    "CHEAP_MODEL",
     "DEFAULT_MODEL",
     "SYSTEM_PROMPT",
+    "TIERS",
     "USAGE_KEYS",
     "ClarificationAsked",
     "ToolCallRecord",

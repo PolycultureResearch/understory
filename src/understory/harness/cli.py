@@ -14,6 +14,11 @@ set the balance cannot cover, prints the running total after each item, and
 stops at the first out of credits error. `--concurrency` stays at 1 by default
 for the same reason: twelve conversations in flight can drain a balance before
 the first report lands.
+
+`--model` repeats, and `--tiers` is shorthand for the default and the cheap
+model, so one command scores the realistic set on both and prints a comparison
+table under the two reports. `--byo` runs the connector surfaces only, which is
+what a client's chatbot sees; run it alongside the default mode and report both.
 """
 
 from __future__ import annotations
@@ -81,7 +86,17 @@ def ask(
 @app.command("eval")
 def eval_command(
     tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
-    model: str = typer.Option(None, "--model", "-m", help="OpenRouter model id."),
+    model: list[str] = typer.Option(
+        None, "--model", "-m", help="OpenRouter model id. Repeat to score several."
+    ),
+    tiers: bool = typer.Option(
+        False, "--tiers", help="Score on the default model and the cheap one, then compare."
+    ),
+    byo: bool = typer.Option(
+        False,
+        "--byo",
+        help="Connector surfaces only: instructions, tool descriptions, get_context.",
+    ),
     deterministic: bool = typer.Option(
         False, "--deterministic", help="Run the specs through the service with no model."
     ),
@@ -101,9 +116,16 @@ def eval_command(
     write: bool = typer.Option(True, help="Write the JSON report under <tenant>/.evals/."),
 ) -> None:
     """Run a tenant's golden set and print the summary."""
-    from understory.harness.agent import DEFAULT_MODEL
+    from understory.harness.agent import DEFAULT_MODEL, TIERS
     from understory.harness.deterministic import run_deterministic
-    from understory.harness.evals import BUDGET_PER_ITEM, BudgetError, run_evals, write_report
+    from understory.harness.evals import (
+        BUDGET_PER_ITEM,
+        BudgetError,
+        EvalReport,
+        compare,
+        run_evals,
+        write_report,
+    )
     from understory.harness.golden import load_golden
     from understory.server.service import Service
     from understory.tenant import load_tenant
@@ -116,32 +138,43 @@ def eval_command(
         raise typer.Exit(1)
     if limit:
         items = items[:limit]
+    models = list(TIERS) if tiers else (model or [DEFAULT_MODEL])
 
+    reports: list[EvalReport] = []
     service = Service(cfg)
     try:
         if deterministic:
-            report = run_deterministic(service, items)
+            reports.append(run_deterministic(service, items))
         else:
-            report = run_evals(
-                service,
-                items,
-                model=model or DEFAULT_MODEL,
-                concurrency=concurrency,
-                budget_per_item=budget_per_item if budget_per_item is not None else BUDGET_PER_ITEM,
-                force=force,
-                echo=typer.echo,
-            )
+            for name in models:
+                reports.append(
+                    run_evals(
+                        service,
+                        items,
+                        model=name,
+                        concurrency=concurrency,
+                        budget_per_item=(
+                            budget_per_item if budget_per_item is not None else BUDGET_PER_ITEM
+                        ),
+                        force=force,
+                        echo=typer.echo,
+                        byo=byo,
+                    )
+                )
     except BudgetError as e:
         typer.echo(f"refusing to start: {e}")
         raise typer.Exit(2) from e
     finally:
         service.close()
 
-    typer.echo(report.markdown())
-    if write:
-        path = write_report(report, cfg.root)
-        typer.echo(f"report: {path}")
-    if report.summary()["failures"]:
+    for report in reports:
+        typer.echo(report.markdown())
+        if write:
+            path = write_report(report, cfg.root)
+            typer.echo(f"report: {path}")
+    if len(reports) > 1:
+        typer.echo(compare(reports))
+    if any(report.summary()["failures"] for report in reports):
         raise typer.Exit(1)
 
 

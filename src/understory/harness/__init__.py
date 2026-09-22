@@ -8,8 +8,10 @@ at all, which is what CI uses.
 from __future__ import annotations
 
 from understory.harness.agent import (
+    CHEAP_MODEL,
     DEFAULT_MODEL,
     SYSTEM_PROMPT,
+    TIERS,
     Turn,
     build_agent,
     run_question,
@@ -20,6 +22,7 @@ from understory.harness.evals import (
     EvalReport,
     ItemScore,
     check_budget,
+    compare,
     key_status,
     run_evals,
     write_report,
@@ -27,8 +30,10 @@ from understory.harness.evals import (
 from understory.harness.golden import Expectation, GoldenItem, load_golden
 
 __all__ = [
+    "CHEAP_MODEL",
     "DEFAULT_MODEL",
     "SYSTEM_PROMPT",
+    "TIERS",
     "BudgetError",
     "EvalReport",
     "Expectation",
@@ -37,6 +42,7 @@ __all__ = [
     "Turn",
     "build_agent",
     "check_budget",
+    "compare",
     "key_status",
     "load_golden",
     "run_deterministic",

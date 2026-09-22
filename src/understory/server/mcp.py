@@ -17,6 +17,7 @@ from pydantic import AnyHttpUrl
 from understory.server.auth import current_subject, make_verifier
 from understory.server.service import Service
 from understory.server.session import Session
+from understory.server.surfaces import TOOL_DESCRIPTIONS, connector_instructions
 from understory.telemetry import user_hash
 from understory.types import MetricSpec
 
@@ -49,11 +50,7 @@ def _session(service: Service, ctx: Context) -> Session:
 
 def build_server(service: Service) -> MCPServer:
     tenant = service.tenant
-    instructions = tenant.instructions or (
-        f"Understory exposes {tenant.display_name}'s governed metrics. Call get_context "
-        "first. Use query_metrics for numbers; present clarifications verbatim; include "
-        "every required_disclosure; call log_answer with your draft before replying."
-    )
+    instructions = connector_instructions(tenant)
 
     kwargs: dict[str, Any] = {}
     verifier = make_verifier(tenant.auth)
@@ -73,70 +70,35 @@ def build_server(service: Service) -> MCPServer:
         **kwargs,
     )
 
-    @mcp.tool(
-        description=(
-            "Business context for this company: what it does, what the metrics mean, "
-            "conventions, data freshness, and which tables run_sql may touch. Call first."
-        )
-    )
+    @mcp.tool(description=TOOL_DESCRIPTIONS["get_context"])
     async def get_context(ctx: Context) -> str:
         return service.get_context(_session(service, ctx))
 
-    @mcp.tool(description="Every governed metric with its label, description, type, and synonyms.")
+    @mcp.tool(description=TOOL_DESCRIPTIONS["list_metrics"])
     async def list_metrics(ctx: Context) -> dict[str, Any]:
         return service.list_metrics(_session(service, ctx))
 
-    @mcp.tool(
-        description=(
-            "One metric in depth: definition, filters baked in, valid dimensions, "
-            "data freshness, and example specs for query_metrics."
-        )
-    )
+    @mcp.tool(description=TOOL_DESCRIPTIONS["describe_metric"])
     async def describe_metric(name: str, ctx: Context) -> dict[str, Any]:
         return service.describe_metric(_session(service, ctx), name)
 
-    @mcp.tool(
-        description=(
-            "Find real values of a categorical dimension, e.g. which countries exist. "
-            "Use before filtering so 'the West' becomes actual values."
-        )
-    )
+    @mcp.tool(description=TOOL_DESCRIPTIONS["search_dimension_values"])
     async def search_dimension_values(
         dimension: str, ctx: Context, query: str = ""
     ) -> dict[str, Any]:
         return service.search_dimension_values(_session(service, ctx), dimension, query)
 
-    @mcp.tool(
-        description=(
-            "Run a governed metric query. Send a spec: metrics (names from list_metrics), "
-            "group_by (entity__dimension names, or metric_time), where clauses, time "
-            "{grain, start, end}, the user's question, and any clarifications "
-            "[{trap, choice}] answered earlier. Returns rows with provenance, or "
-            "needs_clarification with options to show the user, or a refusal."
-        )
-    )
+    @mcp.tool(description=TOOL_DESCRIPTIONS["query_metrics"])
     async def query_metrics(spec: MetricSpec, ctx: Context) -> dict[str, Any]:
         return service.query_metrics(_session(service, ctx), spec).model_dump(mode="json")
 
-    @mcp.tool(
-        description=(
-            "Escape hatch: run one read-only SELECT against the allowed schemas when no "
-            "governed metric answers the question. Pass the user's question and a one-line "
-            "reason the governed metrics could not answer it; both are recorded as a gap for "
-            "the data team. The answer must be labeled as ad hoc SQL and state the reason."
-        )
-    )
+    @mcp.tool(description=TOOL_DESCRIPTIONS["run_sql"])
     async def run_sql(sql: str, question: str, reason: str, ctx: Context) -> dict[str, Any]:
         return service.run_sql(_session(service, ctx), sql, question, reason).model_dump(
             mode="json"
         )
 
-    @mcp.tool(
-        description=(
-            "Send your draft answer before replying. Checks that every number traces to a "
-            "result from this session and that required disclosures are present."
-        )
-    )
+    @mcp.tool(description=TOOL_DESCRIPTIONS["log_answer"])
     async def log_answer(draft: str, ctx: Context) -> dict[str, Any]:
         return service.log_answer(_session(service, ctx), draft).model_dump(mode="json")
 

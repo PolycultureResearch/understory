@@ -88,6 +88,9 @@ def conventions_section(catalog: Catalog, data_through: dict[str, date] | None) 
         "not averaged from daily values.",
         "- Each metric is dated by its own time dimension (listed by describe_metric). "
         "Metrics on different tables can have different freshness.",
+        "- A period whose rows fell far below the same period in the weeks around it is "
+        "disclosed as a possibly incomplete load. The number is still reported; say it is "
+        "a floor for that period.",
     ]
     if data_through:
         lines.append("- Data through, per time dimension:")

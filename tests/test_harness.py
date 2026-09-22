@@ -23,6 +23,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    SystemPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -37,6 +38,7 @@ from understory.harness.deterministic import run_deterministic
 from understory.harness.evals import (
     EvalReport,
     ItemScore,
+    compare,
     numbers_missing,
     run_evals,
     strip_narration,
@@ -44,6 +46,7 @@ from understory.harness.evals import (
 )
 from understory.harness.golden import load_golden
 from understory.server.service import Service
+from understory.server.surfaces import TOOL_DESCRIPTIONS, connector_instructions
 from understory.telemetry import TelemetryWriter
 from understory.tenant import LogConfig, TenantConfig
 from understory.traps.schema import load_registry
@@ -680,3 +683,165 @@ def test_narrated_number_does_not_pass_and_reply_is_not_clean(alpenglow_db):
     assert any("315" in r for r in score.reasons)
     assert report.summary()["clean_rate"] == 0.0
     assert "| cln |" in report.markdown()
+
+
+# --------------------------------------------------------------------------- #
+# 7. The realistic set's report: first-turn answer rate, over-refusal, by kind.
+# --------------------------------------------------------------------------- #
+
+
+def _score(id_: str, kind: str | None, **kw: Any) -> ItemScore:
+    kw.setdefault("expected_status", "resolved")
+    return ItemScore(id=id_, question=id_, kind=kind, **kw)
+
+
+def _report(items: list[ItemScore], mode: str = "agent") -> EvalReport:
+    now = datetime.now(UTC)
+    return EvalReport(
+        tenant="alpenglow", mode=mode, model="m", started_at=now, finished_at=now, items=items
+    )
+
+
+def test_report_breaks_the_headline_down_by_kind():
+    report = _report(
+        [
+            _score("e1", "event", passed=True, first_turn_answer=True, refused=False),
+            _score("e2", "event", passed=False, first_turn_answer=False, refused=True),
+            _score("q1", "quiet", passed=True, first_turn_answer=True, refused=False),
+            _score("o1", "over_refusal", passed=False, first_turn_answer=False, refused=True),
+            _score("f1", "fault", passed=True, first_turn_answer=True, refused=False),
+            # An asked item answered on the second turn: passed, but not first turn.
+            _score(
+                "a1",
+                "event",
+                passed=True,
+                first_turn_answer=False,
+                refused=False,
+                clarifications=["collision:margin"],
+                clarification_resolved=True,
+            ),
+            # A correct refusal: neither rate applies.
+            _score("u1", "quiet", passed=True, expected_status="unanswerable"),
+        ]
+    )
+    s = report.summary()
+    assert s["first_turn_answer_n"] == 6 and s["first_turn_answer_rate"] == 0.5
+    assert s["over_refusal_n"] == 6 and s["over_refusal_rate"] == round(2 / 6, 4)
+    by_kind = s["by_kind"]
+    assert list(by_kind) == ["event", "quiet", "over_refusal", "fault"]
+    assert by_kind["event"] == {
+        "items": 3,
+        "passed": 2,
+        "pass_rate": round(2 / 3, 4),
+        "first_turn_answer_rate": round(1 / 3, 4),
+        "over_refusal_rate": round(1 / 3, 4),
+        "failures": ["e2"],
+    }
+    assert by_kind["quiet"]["first_turn_answer_rate"] == 1.0
+    assert by_kind["over_refusal"]["over_refusal_rate"] == 1.0
+    md = report.markdown()
+    assert "first-turn 50% | over-refusal 33%" in md
+    assert "| kind | items | passed | first-turn | over-refusal | failures |" in md
+    assert "| over_refusal | 1 | 0 | 0% | 100% | o1 |" in md
+
+
+def test_trap_set_report_has_no_kind_table():
+    report = _report([_score("t1", None, passed=True, first_turn_answer=True, refused=False)])
+    assert "by_kind" not in report.summary()
+    assert "| kind |" not in report.markdown()
+
+
+def test_compare_lists_one_row_per_report():
+    default = _report([_score("e1", "event", passed=True, first_turn_answer=True, refused=False)])
+    cheap = _report(
+        [_score("e1", "event", passed=False, first_turn_answer=False, refused=True)], mode="byo"
+    )
+    cheap.model = "cheap"
+    table = compare([default, cheap])
+    lines = table.strip().splitlines()
+    assert lines[0].startswith("| model | mode | passed | first-turn | over-refusal |")
+    assert lines[2] == "| m | agent | 1/1 | 100% | 0% | n/a | n/a | - |"
+    assert lines[3] == "| cheap | byo | 0/1 | 0% | 100% | n/a | n/a | - |"
+
+
+def test_write_report_marks_a_byo_run(tmp_path):
+    path = write_report(_report([], mode="byo"), tmp_path)
+    assert path.name.endswith("-m-byo.json")
+    assert write_report(_report([]), tmp_path).name.endswith("-m.json")
+
+
+# --------------------------------------------------------------------------- #
+# 8. BYO mode: the connector surfaces and nothing else.
+# --------------------------------------------------------------------------- #
+
+
+class _Surfaces:
+    """The scripted loop, recording what the model was shown."""
+
+    def __init__(self) -> None:
+        self.system: str | None = None
+        self.descriptions: dict[str, str | None] = {}
+
+    def __call__(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        self.descriptions = {t.name: t.description for t in info.function_tools}
+        for part in messages[0].parts:
+            if isinstance(part, SystemPromptPart):
+                self.system = part.content
+        return _scripted(messages, info)
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_byo_mode_shows_the_connector_surfaces_only(alpenglow_db):
+    script = _Surfaces()
+    service = _service(alpenglow_db)
+    try:
+        turn = run_question(
+            service,
+            _SPEC["question"],
+            model=FunctionModel(script),
+            session_key="test-byo",
+            byo=True,
+        )
+    finally:
+        service.close()
+
+    assert turn.error is None, turn.error
+    assert script.system == connector_instructions(alpenglow_db)
+    assert "You are an analyst" not in (script.system or "")
+    assert script.descriptions == TOOL_DESCRIPTIONS
+    # The loop itself is unchanged: same tools, same session, same trace.
+    assert [c.name for c in turn.tool_calls] == ["get_context", "query_metrics", "log_answer"]
+    assert turn.metrics_queried == ["net_revenue"]
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_harness_mode_keeps_its_own_prompt_and_docstrings(alpenglow_db):
+    script = _Surfaces()
+    service = _service(alpenglow_db)
+    try:
+        run_question(service, _SPEC["question"], model=FunctionModel(script), session_key="t")
+    finally:
+        service.close()
+    assert script.system is not None and script.system.startswith("You are an analyst")
+    assert script.descriptions["query_metrics"] != TOOL_DESCRIPTIONS["query_metrics"]
+    assert "The spec fields" in (script.descriptions["query_metrics"] or "")
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_run_evals_in_byo_mode_reports_the_mode(alpenglow_db):
+    wanted = "net_revenue_by_month_q1_2025"
+    items = [i for i in load_golden(alpenglow_db.golden_path) if i.id == wanted]
+    assert len(items) == 1
+    service = _service(alpenglow_db)
+    try:
+        report = run_evals(service, items, model=FunctionModel(_scripted), byo=True)
+    finally:
+        service.close()
+    assert report.mode == "byo"
+    score = report.items[0]
+    assert score.passed, score.reasons
+    assert score.kind is None
+    assert score.first_turn_answer is True and score.refused is False
