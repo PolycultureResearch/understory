@@ -58,7 +58,7 @@ Python 3.13, the official MCP SDK, open-source MetricFlow, DuckDB and BigQuery, 
 
 ## Status
 
-MVP on the `mvp-scaffold` branch. The server, all seven tools, the telemetry package, and the harness work end to end against the four fake tenants. The deterministic eval passes every golden item on every tenant, and the live path is verified through OpenRouter. Not yet done: a deployment against a real client warehouse, and connector auth against an identity provider.
+Steps 1 through 4 of the build sequence (design section 14) are merged: harness efficiency, the policy flip, gaps, and the realistic set. The server, all seven tools, the telemetry package, and the harness work end to end against the four fake tenants. Both golden sets pass deterministically on every tenant, and the live path is verified through OpenRouter in both modes and on both model tiers. Next: golden authoring tooling, the external tenant mount, and gap promotion, then the first friendly users. Not yet done: a deployment against a real client warehouse, and connector auth against an identity provider.
 
 ```bash
 export OPENROUTER_API_KEY=...
@@ -66,7 +66,11 @@ uv run understory ask --tenant tenants/alpenglow "How were sales in the US in Ma
 uv run understory eval --tenant tenants/alpenglow --deterministic     # trap set, no LLM, runs in CI
 uv run understory eval --tenant tenants/alpenglow                     # live, writes tenants/alpenglow/.evals/
 uv run understory eval --tenant tenants/alpenglow --set realistic --deterministic
+uv run understory eval --tenant tenants/alpenglow --set realistic --tiers        # default and cheap model, compared
+uv run understory eval --tenant tenants/alpenglow --set realistic --tiers --byo  # connector surfaces only
 ```
+
+The realistic set's report leads with first-turn answer rate and over-refusal rate, broken down by item kind (`event`, `quiet`, `over_refusal`, `fault`). `--byo` runs the agent on the connector instructions and tool descriptions alone, which is what a client's chatbot sees; its numbers are the floor and the default mode's the ceiling.
 
 The realistic set is drafted, not written from scratch. `draft-realistic` reads the seeded ground truth in the warehouse and writes template questions with correct specs; someone rewrites the wording and adds over-refusal items; `fill` runs every spec once and records the numbers as a snapshot with `verified: false`.
 

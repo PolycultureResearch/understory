@@ -36,7 +36,7 @@ import duckdb
 from understory.protocols import QueryError
 from understory.tenant import DuckDBConfig
 from understory.types import Column, Result
-from understory.warehouse._values import as_date, json_safe_row
+from understory.warehouse._values import DAILY_COUNTS_CAP, as_date, json_safe_row
 
 SYSTEM_SCHEMAS = frozenset({"information_schema", "pg_catalog"})
 
@@ -99,6 +99,17 @@ class DuckDBWarehouse:
         if not rows:
             return None
         return as_date(rows[0][0])
+
+    def daily_counts(self, relation: str, column: str) -> list[tuple[date, int]]:
+        col = quote_ident(column)
+        sql = (
+            f"SELECT CAST({col} AS DATE) AS day, COUNT(*) AS n FROM {relation} "
+            f"WHERE {col} IS NOT NULL GROUP BY 1 ORDER BY 1"
+        )
+        _, rows, _, _ = self._execute(
+            sql, params=None, timeout_s=self.timeout_s, row_cap=DAILY_COUNTS_CAP
+        )
+        return [(d, int(n)) for day, n in rows if (d := as_date(day)) is not None]
 
     def dimension_values(self, relation: str, column: str, query: str, limit: int) -> Result:
         col = quote_ident(column)

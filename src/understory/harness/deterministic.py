@@ -47,7 +47,9 @@ def run_deterministic(service: Service, items: list[GoldenItem]) -> EvalReport:
 def _score(service: Service, item: GoldenItem) -> ItemScore:
     t0 = time.monotonic()
     exp = item.expected
-    score = ItemScore(id=item.id, question=item.question, expected_status=exp.status)
+    score = ItemScore(
+        id=item.id, question=item.question, kind=item.kind, expected_status=exp.status
+    )
     reasons: list[str] = []
 
     if item.spec is None:
@@ -124,6 +126,16 @@ def _score(service: Service, item: GoldenItem) -> ItemScore:
         score.disclosure = not missing_text
         if missing_text:
             reasons.append(f"disclosures missing: {missing_text}")
+
+    # The realistic set's two rates, on items a correct run answers.
+    if exp.resolves:
+        score.first_turn_answer = bool(
+            first.status == Status.resolved
+            and not asked
+            and score.answer is not False
+            and score.disclosure is not False
+        )
+        score.refused = str(first.status) in ("unanswerable", "invalid")
 
     score.answer_text = _render(final)
     score.reasons = reasons

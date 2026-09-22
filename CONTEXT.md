@@ -26,6 +26,10 @@ The time window applied when a question names none. Preferred and disclosed, nev
 A sentence the reader of an answer must see about what was applied to get the number: which candidate a trap chose, which time window, which dimension role, or why the answer fell back to ad hoc SQL. Human-facing, and derived from provenance wherever possible.
 _Avoid_: caveat, note, warning
 
+**Volume check**:
+The descriptive check `query_metrics` runs on each time dimension a query reads: a period inside the window whose row count fell far below the same period in the weeks around it is disclosed as a possibly incomplete load. Never changes a number. The first of the data-health checks; the rest are roadmap 1.4.
+_Avoid_: anomaly detection (it looks for missing rows, not for business change), freshness (that is the anchor)
+
 **Provenance**:
 The machine-readable record of where a number came from: the exact tables and columns touched, the method that built the SQL, and whether it was governed. For the log and for audit, not for the reader.
 _Avoid_: lineage, source, citation
@@ -83,6 +87,10 @@ The model loop that drives the tools: the same tools the chatbot sees, in proces
 The agent plus the eval runner and command line. The reference chatbot, always cheaper and stricter than a client's.
 _Avoid_: bot, test rig
 
+**BYO mode**:
+The harness run with its own prompt removed, seeing only the connector surfaces: the instructions and tool descriptions the MCP server publishes, and `get_context`. What a client's chatbot sees. Its numbers are the floor; the harness numbers are the ceiling. Report both.
+_Avoid_: connector mode (a connector is the real thing; this is its approximation)
+
 **Transport**:
 The surface a person types into when Understory runs the agent itself. Slack is the first.
 _Avoid_: integration, channel
@@ -94,7 +102,7 @@ The hand-written golden questions per tenant that exercise every declared trap a
 _Avoid_: golden set (ambiguous now that there are two)
 
 **Realistic set**:
-Golden questions per tenant weighted toward what stakeholders actually ask, partly generated from seeded ground truth. Its headline number is first-turn answer rate with correct disclosures. Guards adoption. Each item has a kind: `event` (a month the ground truth put something in), `quiet` (a month with nothing), `over_refusal` (answerable but looks risky), later `fault`.
+Golden questions per tenant weighted toward what stakeholders actually ask, partly generated from seeded ground truth. Its headline number is first-turn answer rate with correct disclosures: the share of answerable items whose first turn came back with the right numbers and disclosures and no ask in between. Guards adoption. Each item has a kind: `event` (a month the ground truth put something in), `quiet` (a month with nothing), `over_refusal` (answerable but looks risky), `fault` (a period the warehouse loaded only partly; expects the volume disclosure). The report breaks the headline down by kind.
 _Avoid_: adoption set, generated set
 
 **Snapshot**:

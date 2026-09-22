@@ -24,6 +24,8 @@ from understory.guard import guard_sql
 from understory.protocols import CompileError, QueryError, SemanticLayer, Warehouse
 from understory.semantic import make_semantic_layer
 from understory.server.session import Session, SessionStore, review_answer
+from understory.server.volume import Dropout, find_dropouts
+from understory.server.volume import describe as describe_dropout
 from understory.server.windows import apply_anchor
 from understory.server.windows import describe as describe_window
 from understory.telemetry import (
@@ -93,6 +95,7 @@ class Service:
         self.telemetry = telemetry or TelemetryWriter(tenant.log, tenant.name)
         self.sessions = SessionStore()
         self._freshness: dict[str, tuple[float, date | None]] = {}
+        self._dropouts: dict[str, tuple[float, list[Dropout]]] = {}
 
     def close(self) -> None:
         self.telemetry.close()
@@ -255,6 +258,7 @@ class Service:
             window_text = describe_window(applied_time, anchor, window)
             if window_text and not any("anchored" in d for d in disclosures):
                 disclosures.append(window_text)
+        disclosures.extend(self._volume_disclosures(spec.metrics, applied_time, anchor))
 
         # 4. Compile and execute.
         try:
@@ -491,12 +495,8 @@ class Service:
         self._freshness[time_dimension] = (now, value)
         return value
 
-    def _anchor_for(self, metrics: list[str]) -> date | None:
-        """Earliest latest-date across every time dimension the metrics read.
-
-        A derived metric over orders and returns is only complete through the
-        older of the two, so that is the anchor.
-        """
+    def _time_dimensions(self, metrics: list[str]) -> list[str]:
+        """Every time dimension the metrics read, in first-seen order."""
         dims: list[str] = []
         for m in metrics:
             info = self.catalog.metrics[m]
@@ -504,8 +504,56 @@ class Service:
             for td in [info.time_dimension, *extra]:
                 if td and td not in dims:
                     dims.append(td)
+        return dims
+
+    def _anchor_for(self, metrics: list[str]) -> date | None:
+        """Earliest latest-date across every time dimension the metrics read.
+
+        A derived metric over orders and returns is only complete through the
+        older of the two, so that is the anchor.
+        """
+        dims = self._time_dimensions(metrics)
         dates = [d for d in (self._data_through(td) for td in dims) if d is not None]
         return min(dates) if dates else None
+
+    def _volume_disclosures(
+        self, metrics: list[str], applied: Any, anchor: date | None
+    ) -> list[str]:
+        """One disclosure per load dropout the applied window touches.
+
+        The check is descriptive: it never changes the number. See
+        `understory.server.volume` for what counts as a dropout.
+        """
+        if not self.tenant.checks.volume:
+            return []
+        start = applied.start or date.min
+        end = applied.end or anchor or date.max
+        out: list[str] = []
+        for td in self._time_dimensions(metrics):
+            for drop in self._dropouts_for(td):
+                if drop.overlaps(start, end):
+                    out.append(describe_dropout(drop, td))
+        return out
+
+    def _dropouts_for(self, time_dimension: str) -> list[Dropout]:
+        now = time.monotonic()
+        cached = self._dropouts.get(time_dimension)
+        if cached and now - cached[0] < _FRESHNESS_TTL_S:
+            return cached[1]
+        dim = self.catalog.dimensions.get(time_dimension)
+        found: list[Dropout] = []
+        if dim is not None:
+            try:
+                series = self.warehouse.daily_counts(dim.relation, dim.column)
+                found = find_dropouts(
+                    series,
+                    low=self.tenant.checks.volume_low_ratio,
+                    min_rows=self.tenant.checks.volume_min_rows,
+                )
+            except QueryError as e:
+                log.warning("daily_counts failed for %s: %s", time_dimension, e)
+        self._dropouts[time_dimension] = (now, found)
+        return found
 
     def _data_through_all(self) -> dict[str, date]:
         out: dict[str, date] = {}

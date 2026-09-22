@@ -151,6 +151,21 @@ def test_latest_date_none_when_empty(config):
     assert wh.latest_date("`proj.marts.fct_orders`", "order_date") is None
 
 
+def test_daily_counts(config):
+    client, _ = _client_returning(
+        [_row(date(2026, 5, 30), 12), _row(date(2026, 5, 31), 7)],
+        [_field("day", "DATE"), _field("n", "INTEGER")],
+    )
+    wh = BigQueryWarehouse(config, client=client)
+    series = wh.daily_counts('"proj"."marts"."fct_orders"', "order_date")
+    assert series == [(date(2026, 5, 30), 12), (date(2026, 5, 31), 7)]
+    sql = client.query.call_args.args[0]
+    assert sql == (
+        "SELECT CAST(`order_date` AS DATE) AS day, COUNT(*) AS n FROM `proj`.`marts`.`fct_orders` "
+        "WHERE `order_date` IS NOT NULL GROUP BY 1 ORDER BY 1"
+    )
+
+
 def test_dimension_values_uses_query_parameter(config):
     client, job = _client_returning(
         [_row("US", 100), _row("AU", 20)],

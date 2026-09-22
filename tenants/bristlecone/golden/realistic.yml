@@ -25,7 +25,7 @@ questions:
     expected:
       status: resolved
       metrics: [pos_dollars]
-      numbers: [1538960.79, 2443778.2, 1619925.07]
+      numbers: [1619925.07, 1538960.79, 2443778.2]
 
   - id: topline_by_month_2024_q4
     question: "What was topline by month for Q4 2024?"
@@ -40,7 +40,7 @@ questions:
       status: resolved
       metrics: [wholesale_net_revenue]
       disclosures: ["wholesale net revenue"]
-      numbers: [1689334.95, 1614323.03, 1868239.08]
+      numbers: [1614323.03, 1689334.95, 1868239.08]
 
   # -- event: whole_earth_delisting, 2025-02-10..03-23, velocity at Whole Earth down 45%
   - id: pos_dollars_whole_earth_2025_q1
@@ -61,7 +61,7 @@ questions:
       status: resolved
       metrics: [pos_dollars]
       disclosures: ["pos dollars", "wholesale net revenue"]
-      numbers: [530451.29, 510329.06, 423635.44]
+      numbers: [530451.29, 423635.44, 510329.06]
 
   - id: pos_dollars_by_banner_2025_q1
     question: "Scan dollars by retailer banner for Q1 2025"
@@ -74,7 +74,7 @@ questions:
     expected:
       status: resolved
       metrics: [pos_dollars]
-      numbers: [1351534.36, 1937378.15, 2631326.31, 1020799.85, 1464415.79]
+      numbers: [2631326.31, 1351534.36, 1937378.15, 1020799.85, 1464415.79]
 
   # -- event: brand_budget_cut, 2025-05-12..06-08, paid social spend down 60%
   - id: marketing_spend_paid_social_2025_05_06
@@ -108,7 +108,7 @@ questions:
     expected:
       status: resolved
       metrics: [marketing_spend]
-      numbers: [30315.59, 33017.01, 43898.2, 30704.7]
+      numbers: [43898.2, 30704.7, 30315.59, 33017.01]
 
   # -- event: tinctures_viral_spike, 2025-09-08..21, demand x1.6
   - id: shipped_cases_tinctures_2025_08_09
@@ -124,7 +124,7 @@ questions:
     expected:
       status: resolved
       metrics: [shipped_cases]
-      numbers: [5021.0, 3704.0]
+      numbers: [3704.0, 5021.0]
 
   - id: net_revenue_2025_09
     question: "What was net revenue in September 2025?"
@@ -170,7 +170,7 @@ questions:
       status: resolved
       metrics: [shipped_cases]
       disclosures: ["shipment's channel"]
-      numbers: [31595.0, 33817.0, 23087.0, 16612.0, 41956.0]
+      numbers: [41956.0, 23087.0, 31595.0, 33817.0, 16612.0]
 
   - id: avg_case_price_2025_q3
     question: "What was our average case price in Q3 2025?"
@@ -196,7 +196,7 @@ questions:
       status: resolved
       metrics: [trade_spend]
       disclosures: ["shipment's category"]
-      numbers: [0.0, 8671.27, 32329.59]
+      numbers: [0.0, 32329.59, 8671.27]
 
   - id: shipped_cases_independents_2026_01
     question: "How many cases went to independents in January 2026?"
@@ -289,3 +289,39 @@ questions:
       metrics: [marketing_spend]
       disclosures: ["marketing spend", "trade spend"]
       numbers: [7486.91]
+
+  # -- fault: pos_feed_outage, 2025-01-27..02-02, the POS feed delivered a quarter of the week
+  - id: pos_units_by_week_2025_01_02
+    question: "POS units by week from January 13 to February 16, 2025"
+    kind: fault
+    source: ground_truth:pos_feed_outage
+    notes: >
+      The week of January 27 loaded 38 scan rows against 180 in the weeks
+      around it. The number is reported as returned; the volume check
+      discloses that the week is a floor. A one-week feed is one bucket, so a
+      single low bucket is enough to fire.
+    spec:
+      metrics: [pos_units]
+      group_by: [metric_time]
+      time: {grain: week, start: 2025-01-13, end: 2025-02-16}
+    expected:
+      status: resolved
+      metrics: [pos_units]
+      disclosures: ["2025-01-27", "incomplete"]
+      numbers: [102783.0, 92428.0, 21625.0, 90282.0, 82378.0]
+
+  - id: pos_dollars_2025_01
+    question: "Scan dollars for January 2025, one number"
+    kind: fault
+    source: ground_truth:pos_feed_outage
+    notes: >
+      A monthly total that spans the outage week. The disclosure still names
+      the week, so the reader knows which part of the month is a floor.
+    spec:
+      metrics: [pos_dollars]
+      time: {start: 2025-01-01, end: 2025-01-31}
+    expected:
+      status: resolved
+      metrics: [pos_dollars]
+      disclosures: ["2025-01-27", "incomplete"]
+      numbers: [2560293.89]

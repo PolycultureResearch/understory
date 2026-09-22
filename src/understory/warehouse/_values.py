@@ -60,3 +60,7 @@ def as_date(value: Any) -> date | None:
     if isinstance(value, str):
         return datetime.fromisoformat(value).date()
     raise TypeError(f"cannot interpret {value!r} as a date")
+
+
+DAILY_COUNTS_CAP = 100_000
+"""Days a volume series may hold: two hundred and seventy years of daily data."""

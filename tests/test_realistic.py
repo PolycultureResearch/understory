@@ -27,6 +27,7 @@ from understory.types import Catalog, Column, DimensionInfo, MetricInfo, Result
 
 TENANTS = ["alpenglow", "white_cube", "meridian", "bristlecone"]
 KINDS = {"event", "quiet", "over_refusal"}
+ALL_KINDS = KINDS | {"fault"}
 
 
 # --------------------------------------------------------------------------- #
@@ -349,7 +350,7 @@ def test_realistic_sets_load(tenants):
         assert KINDS <= kinds, f"{name}: kinds {kinds}"
         unfilled: list[str] = []
         for item in items:
-            assert item.kind in KINDS, f"{name}/{item.id}: kind {item.kind}"
+            assert item.kind in ALL_KINDS, f"{name}/{item.id}: kind {item.kind}"
             assert item.source, f"{name}/{item.id} has no source"
             assert item.spec is not None, f"{name}/{item.id} has no spec"
             assert item.id not in trap_ids, f"{name}/{item.id} duplicates a trap item"
@@ -362,6 +363,12 @@ def test_realistic_sets_load(tenants):
         assert len(unfilled) <= len(items) // 5, f"{name}: too many unfilled: {unfilled}"
         over = [i for i in items if i.kind == "over_refusal"]
         assert len(over) >= 4, f"{name}: only {len(over)} over-refusal items"
+        for item in (i for i in items if i.kind == "fault"):
+            assert item.expected.disclosures, f"{name}/{item.id}: a fault item expects a disclosure"
+    faulted = {
+        n for n in TENANTS if any(i.kind == "fault" for i in load_golden(tenants[n].realistic_path))
+    }
+    assert faulted == {"bristlecone", "white_cube"}, faulted
 
 
 @pytest.mark.fake_db
@@ -393,4 +400,19 @@ def test_realistic_numbers_still_hold(tenant, tmp_path):
         (i.id, i.reasons) for i in report.items if i.answer is False or i.disclosure is False
     ]
     assert not drifted, f"{tenant.name}: {drifted}"
-    assert report.summary()["pass_rate"] >= 0.8, report.markdown()
+    summary = report.summary()
+    assert summary["pass_rate"] >= 0.8, report.markdown()
+
+    # The headline and its breakdown are there, and asks count against it.
+    assert summary["first_turn_answer_n"] >= summary["items"] - 3
+    assert summary["first_turn_answer_rate"] is not None
+    assert summary["over_refusal_rate"] == 0.0, report.markdown()
+    by_kind = summary["by_kind"]
+    assert list(by_kind)[:3] == ["event", "quiet", "over_refusal"]
+    asked = [i for i in report.items if i.clarifications]
+    assert all(i.first_turn_answer is False for i in asked)
+    if tenant.name in ("bristlecone", "white_cube"):
+        fault = by_kind["fault"]
+        assert fault["items"] == 2 and fault["passed"] == 2, fault
+        assert fault["first_turn_answer_rate"] == 1.0
+    assert "| kind | items |" in report.markdown()

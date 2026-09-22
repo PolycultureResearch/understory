@@ -75,6 +75,22 @@ class Limits(BaseModel):
     dimension_values_limit: int = 25
 
 
+class Checks(BaseModel):
+    """Descriptive checks on the data behind a resolved query.
+
+    Each one adds a disclosure and never changes a number. `volume` flags a
+    period inside the window whose row count fell far below the same period in
+    the weeks around it, which is what an incomplete load looks like. See
+    `understory.server.volume` for the rule and its two thresholds.
+    """
+
+    volume: bool = True
+    volume_low_ratio: float = 0.5
+    """A period under this share of its baseline is low."""
+    volume_min_rows: int = 20
+    """Baselines below this are too sparse to judge."""
+
+
 class SqlScope(BaseModel):
     """What run_sql may touch. Schemas are matched case-insensitively."""
 
@@ -130,6 +146,7 @@ class TenantConfig(BaseModel):
     sql: SqlScope = Field(default_factory=SqlScope)
     log: LogConfig
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    checks: Checks = Field(default_factory=Checks)
     instructions: str | None = None
     """Short text for the MCP server `instructions` field."""
 

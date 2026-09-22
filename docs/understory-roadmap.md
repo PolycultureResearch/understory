@@ -30,7 +30,7 @@ Depends on a few weeks of production logs to know which questions recur. It is a
 
 ### 1.4 Freshness and test status in provenance
 
-Read `run_results.json` and `sources.json` from the dbt deploy and attach upstream test failures and source freshness to every result. A failing test upstream of a metric is disclosed with the result. This is the cheap half of the data health checks in draft 0.1 and it does not need the explanation engine.
+Read `run_results.json` and `sources.json` from the dbt deploy and attach upstream test failures and source freshness to every result. A failing test upstream of a metric is disclosed with the result. This is the cheap half of the data health checks in draft 0.1 and it does not need the explanation engine. The volume check (design 4.2, step 4) is the first of these and is in: it reads row counts, not dbt artifacts, so it works with no deploy metadata at all. Two things it cannot see and this item should: a single low day on a daily feed, which the check leaves alone because a holiday looks the same, and a dropout that a distinct-count mart absorbs (white_cube's DAU over the product events outage).
 
 ### 1.5 Optional LLM critic
 

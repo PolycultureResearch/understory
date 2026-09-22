@@ -34,7 +34,7 @@ from typing import Any
 from understory.protocols import QueryError
 from understory.tenant import BigQueryConfig
 from understory.types import Column, Result
-from understory.warehouse._values import as_date, json_safe_row
+from understory.warehouse._values import DAILY_COUNTS_CAP, as_date, json_safe_row
 
 
 def bq_relation(relation: str) -> str:
@@ -110,6 +110,17 @@ class BigQueryWarehouse:
         if not rows:
             return None
         return as_date(rows[0][0])
+
+    def daily_counts(self, relation: str, column: str) -> list[tuple[date, int]]:
+        col = bq_ident(column)
+        sql = (
+            f"SELECT CAST({col} AS DATE) AS day, COUNT(*) AS n FROM {bq_relation(relation)} "
+            f"WHERE {col} IS NOT NULL GROUP BY 1 ORDER BY 1"
+        )
+        _, rows, _, _ = self._execute(
+            sql, params=None, timeout_s=self.timeout_s, row_cap=DAILY_COUNTS_CAP
+        )
+        return [(d, int(n)) for day, n in rows if (d := as_date(day)) is not None]
 
     def dimension_values(self, relation: str, column: str, query: str, limit: int) -> Result:
         col = bq_ident(column)

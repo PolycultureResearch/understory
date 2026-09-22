@@ -19,7 +19,7 @@ questions:
     expected:
       status: resolved
       metrics: [marketing_spend]
-      numbers: [8169.03, 10094.32, 1468.81]
+      numbers: [1468.81, 8169.03, 10094.32]
 
   # -- event: surprise direct-convert shift, 2024-10-16..11-07
   - id: direct_conversions_2024_09_10
@@ -34,7 +34,7 @@ questions:
     expected:
       status: resolved
       metrics: [direct_conversions]
-      numbers: [7.0, 9.0]
+      numbers: [9.0, 7.0]
 
   # -- event: latam campaign, 2025-03-03..05-25, Brazil signup rate x2.2, paid social ramp
   - id: signups_brazil_by_month_2025_02_06
@@ -50,7 +50,7 @@ questions:
     expected:
       status: resolved
       metrics: [signups]
-      numbers: [162.0, 213.0, 234.0, 232.0, 107.0]
+      numbers: [107.0, 213.0, 232.0, 234.0, 162.0]
 
   - id: new_mrr_by_month_2025_q2
     question: "New MRR by month for Q2 2025"
@@ -64,7 +64,7 @@ questions:
     expected:
       status: resolved
       metrics: [new_mrr]
-      numbers: [4571.67, 4298.67, 3745.67]
+      numbers: [3745.67, 4298.67, 4571.67]
 
   - id: visit_signup_rate_2025_04
     question: "What was our visit-to-signup rate in April 2025?"
@@ -105,7 +105,7 @@ questions:
     expected:
       status: resolved
       metrics: [trial_activation_rate]
-      numbers: [0.7105, 0.498, 0.6858, 0.5323, 0.7248, 0.7252]
+      numbers: [0.5323, 0.7252, 0.6858, 0.7105, 0.7248, 0.498]
 
   - id: trial_conversion_rate_by_quarter_2025_h2
     question: "Trial conversion rate in Q4 2025 versus Q3"
@@ -118,7 +118,7 @@ questions:
     expected:
       status: resolved
       metrics: [trial_conversion_rate]
-      numbers: [0.2579, 0.2507]
+      numbers: [0.2507, 0.2579]
 
   - id: conversions_prefer_2025_10
     question: "How were conversions in October 2025?"
@@ -151,7 +151,7 @@ questions:
     expected:
       status: resolved
       metrics: [signups]
-      numbers: [1056.0, 1458.0]
+      numbers: [1458.0, 1056.0]
 
   - id: signups_2026_02
     question: "How many signups did we get in February 2026?"
@@ -196,7 +196,7 @@ questions:
     expected:
       status: resolved
       metrics: [mrr]
-      numbers: [2597299.67, 2394136.83, 2605379.5]
+      numbers: [2394136.83, 2597299.67, 2605379.5]
 
   - id: customer_churn_rate_2026_06
     question: "What was our customer churn rate in June 2026?"
@@ -241,7 +241,7 @@ questions:
       answers: {"collision:revenue": revenue}
       metrics: [revenue]
       disclosures: ["revenue"]
-      numbers: [63007.0, 56080.0, 54208.0]
+      numbers: [54208.0, 56080.0, 63007.0]
 
   - id: mrr_2025_01_31
     question: "What was MRR at the end of January 2025?"
@@ -267,7 +267,7 @@ questions:
     expected:
       status: resolved
       metrics: [signups]
-      numbers: [379.0, 508.0, 283.0, 587.0, 1255.0, 123.0, 1017.0]
+      numbers: [508.0, 123.0, 283.0, 1017.0, 587.0, 1255.0, 379.0]
 
   - id: arpu_2025_07
     question: "What was ARPU in July 2025?"
@@ -328,7 +328,7 @@ questions:
       status: resolved
       metrics: [signups]
       disclosures: ["signup country"]
-      numbers: [1465.0, 951.0, 1840.0, 1221.0, 993.0, 8087.0, 1128.0, 929.0, 1697.0, 1499.0, 1978.0, 2454.0]
+      numbers: [993.0, 951.0, 2454.0, 1465.0, 1978.0, 1128.0, 1697.0, 1840.0, 929.0, 1221.0, 1499.0, 8087.0]
 
   - id: failed_payments_2026_q1
     question: "How many payments failed in Q1 2026?"
@@ -373,7 +373,7 @@ questions:
     expected:
       status: resolved
       metrics: [expansion_mrr]
-      numbers: [510.0, 243.67, 252.17, 362.67, 246.5, 736.67, 153.0, 742.33, 365.5, 640.33, 325.83, 345.67]
+      numbers: [153.0, 325.83, 252.17, 243.67, 362.67, 345.67, 365.5, 246.5, 510.0, 640.33, 742.33, 736.67]
 
   - id: visit_signup_rate_mobile_2026_01_02
     question: "Visit-to-signup rate on mobile for January and February 2026"
@@ -393,3 +393,38 @@ questions:
       status: resolved
       metrics: [visit_signup_rate]
       numbers: [0.0357, 0.0301]
+
+  # -- fault: product_pipeline_outage, 2024-11-12..13, the product events pipeline delivered 30%
+  - id: product_events_by_day_2024_11
+    question: "Product events per day from November 10 to 15, 2024"
+    kind: fault
+    source: ground_truth:product_pipeline_outage
+    notes: >
+      Two days in a daily feed, each about a third of the same weekday in the
+      weeks around them. A run of two is what the volume check needs on a daily
+      table; one low day alone reads as a holiday. The DAU and WAU metrics on
+      the activity-days mart absorb this outage (a user with one surviving
+      event still counts as active), so they carry no disclosure and no fault
+      item.
+    spec:
+      metrics: [product_events]
+      group_by: [metric_time]
+      time: {grain: day, start: 2024-11-10, end: 2024-11-15}
+    expected:
+      status: resolved
+      metrics: [product_events]
+      disclosures: ["2024-11-12", "incomplete"]
+      numbers: [3394.0, 3138.0, 934.0, 1087.0, 3616.0, 2819.0]
+
+  - id: product_events_2024_11
+    question: "How many product events did we log in November 2024?"
+    kind: fault
+    source: ground_truth:product_pipeline_outage
+    spec:
+      metrics: [product_events]
+      time: {start: 2024-11-01, end: 2024-11-30}
+    expected:
+      status: resolved
+      metrics: [product_events]
+      disclosures: ["2024-11-12", "incomplete"]
+      numbers: [99976.0]
