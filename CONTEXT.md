@@ -84,7 +84,7 @@ _Avoid_: session
 The model loop that drives the tools: the same tools the chatbot sees, in process, behind a pinned model.
 
 **Harness**:
-The agent plus the eval runner and command line. The reference chatbot, always cheaper and stricter than a client's.
+The agent plus the eval runner and command line. The reference chatbot, and the one place the closing check is enforced in code rather than asked for. Its prompt is a variable under test, not a ceiling.
 _Avoid_: bot, test rig
 
 **BYO mode**:

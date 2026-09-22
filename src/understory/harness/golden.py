@@ -54,8 +54,8 @@ GoldenKind = Literal["trap", "catalog", "event", "quiet", "over_refusal", "fault
 items are one canonical question per metric, drafted by `understory draft-golden`. The
 realistic set's kinds: `event` asks about a month where the seeded ground truth
 put something, `quiet` about a month where nothing happened, `over_refusal` is
-an answerable question that looks risky, `fault` a month with a data-quality
-fault (not yet drafted; the server has no volume or freshness check to score)."""
+an answerable question that looks risky, `fault` a period the warehouse loaded
+only partly, which expects the volume disclosure."""
 
 
 class Expectation(BaseModel):

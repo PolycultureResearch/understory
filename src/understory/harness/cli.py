@@ -21,6 +21,11 @@ the first report lands.
 model, so one command scores the realistic set on both and prints a comparison
 table under the two reports. `--byo` runs the connector surfaces only, which is
 what a client's chatbot sees; run it alongside the default mode and report both.
+
+`--id` picks items by name and `--repeat` runs each one several times, which is
+how a prompt change is measured on the handful of items that carry the variance
+before it is confirmed on the whole set. `--prompt` and `--no-enforce-check`
+are the harness variants under test.
 """
 
 from __future__ import annotations
@@ -106,6 +111,16 @@ def eval_command(
         "trap", "--set", "-s", help="Which golden set: 'trap' (questions.yml) or 'realistic'."
     ),
     limit: int = typer.Option(0, "--limit", "-n", help="Only the first N items. 0 means all."),
+    ids: list[str] = typer.Option(None, "--id", help="Only these item ids. Repeatable."),
+    repeat: int = typer.Option(1, "--repeat", "-r", help="Run each item this many times."),
+    prompt: str = typer.Option(
+        "harness", "--prompt", help="Harness system prompt: 'harness' or 'lean'."
+    ),
+    enforce_check: bool = typer.Option(
+        True,
+        "--enforce-check/--no-enforce-check",
+        help="Run the closing check on the reply when the model did not. Off in BYO mode.",
+    ),
     concurrency: int = typer.Option(
         1, "--concurrency", "-c", help="Items in flight at once. Keep it at 1 to watch the spend."
     ),
@@ -138,6 +153,13 @@ def eval_command(
     if not items:
         typer.echo(f"{cfg.name}: no golden questions at {path}")
         raise typer.Exit(1)
+    if ids:
+        known = {i.id for i in items}
+        missing = [i for i in ids if i not in known]
+        if missing:
+            typer.echo(f"{cfg.name}: no such items: {missing}")
+            raise typer.Exit(1)
+        items = [i for i in items if i.id in set(ids)]
     if limit:
         items = items[:limit]
     models = list(TIERS) if tiers else (model or [DEFAULT_MODEL])
@@ -161,6 +183,9 @@ def eval_command(
                         force=force,
                         echo=typer.echo,
                         byo=byo,
+                        prompt=prompt,
+                        enforce_check=enforce_check and not byo,
+                        repeat=repeat,
                     )
                 )
     except BudgetError as e:

@@ -263,3 +263,6 @@ class AnswerReview(BaseModel):
     unsourced: list[NumberCheck] = Field(default_factory=list)
     disclosures_present: list[str] = Field(default_factory=list)
     disclosures_missing: list[str] = Field(default_factory=list)
+    how_to_read: str | None = None
+    """What the chatbot's next message is. Positive, because a model told what
+    not to say tends to say it: the corrected answer, addressed to the user."""

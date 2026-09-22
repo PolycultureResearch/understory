@@ -23,6 +23,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     SystemPromptPart,
     TextPart,
     ToolCallPart,
@@ -760,14 +761,63 @@ def test_compare_lists_one_row_per_report():
     table = compare([default, cheap])
     lines = table.strip().splitlines()
     assert lines[0].startswith("| model | mode | passed | first-turn | over-refusal |")
-    assert lines[2] == "| m | agent | 1/1 | 100% | 0% | n/a | n/a | - |"
+    assert lines[2] == "| m | agent/harness | 1/1 | 100% | 0% | n/a | n/a | - |"
     assert lines[3] == "| cheap | byo | 0/1 | 0% | 100% | n/a | n/a | - |"
 
 
-def test_write_report_marks_a_byo_run(tmp_path):
-    path = write_report(_report([], mode="byo"), tmp_path)
-    assert path.name.endswith("-m-byo.json")
-    assert write_report(_report([]), tmp_path).name.endswith("-m.json")
+def test_report_label_names_the_variant():
+    assert _report([]).label == "agent/harness"
+    lean = _report([])
+    lean.prompt, lean.enforce_check = "lean", True
+    assert lean.label == "agent/lean+check"
+    assert _report([], mode="byo").label == "byo"
+    assert _report([], mode="deterministic").label == "deterministic"
+
+
+def test_write_report_names_the_variant(tmp_path):
+    assert write_report(_report([], mode="byo"), tmp_path).name.endswith("-m-byo.json")
+    assert write_report(_report([]), tmp_path).name.endswith("-m-agent-harness.json")
+    assert write_report(_report([], mode="deterministic"), tmp_path).name.endswith("-m.json")
+
+
+def test_report_counts_passes_per_item_across_repeats():
+    report = _report(
+        [
+            _score("e1", "event", passed=True, first_turn_answer=True, run=1),
+            _score(
+                "e1",
+                "event",
+                passed=False,
+                first_turn_answer=False,
+                run=2,
+                reasons=["log_answer never called"],
+            ),
+            _score(
+                "e1",
+                "event",
+                passed=False,
+                first_turn_answer=False,
+                run=3,
+                reasons=["log_answer never called"],
+            ),
+            _score("q1", "quiet", passed=True, first_turn_answer=True, run=1),
+            _score("q1", "quiet", passed=True, first_turn_answer=True, run=2),
+            _score("q1", "quiet", passed=True, first_turn_answer=True, run=3),
+        ]
+    )
+    report.repeat = 3
+    by_item = report.summary()["by_item"]
+    assert by_item["e1"] == {
+        "runs": 3,
+        "passed": 1,
+        "first_turn_answer": 1,
+        "reasons": {"log_answer never called": 2},
+    }
+    assert by_item["q1"]["passed"] == 3
+    md = report.markdown()
+    assert "- x3" in md.splitlines()[0]
+    assert "| e1 | 1/3 | 1/3 | log_answer never called x2 |" in md
+    assert "by_item" not in _report([]).summary()
 
 
 # --------------------------------------------------------------------------- #
@@ -845,3 +895,174 @@ def test_run_evals_in_byo_mode_reports_the_mode(alpenglow_db):
     assert score.passed, score.reasons
     assert score.kind is None
     assert score.first_turn_answer is True and score.refused is False
+
+
+# --------------------------------------------------------------------------- #
+# 9. The structural closing check, the lean prompt, and repeats.
+# --------------------------------------------------------------------------- #
+
+
+def _retried(messages: list[ModelMessage]) -> bool:
+    return any(
+        isinstance(part, RetryPromptPart)
+        for m in messages
+        if isinstance(m, ModelRequest)
+        for part in m.parts
+    )
+
+
+def _forgetful(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """get_context, query_metrics, then reply without ever calling log_answer."""
+    returned = _returned(messages)
+    if "get_context" not in returned:
+        return ModelResponse(parts=[ToolCallPart("get_context", {})])
+    if "query_metrics" not in returned:
+        return ModelResponse(parts=[ToolCallPart("query_metrics", {"spec": _SPEC})])
+    return ModelResponse(parts=[TextPart(_draft(returned))])
+
+
+def _sloppy(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Like _forgetful, but the first reply carries a number no result returned.
+
+    On the retry the harness hands back, it replies with the sourced draft.
+    """
+    returned = _returned(messages)
+    if "get_context" not in returned:
+        return ModelResponse(parts=[ToolCallPart("get_context", {})])
+    if "query_metrics" not in returned:
+        return ModelResponse(parts=[ToolCallPart("query_metrics", {"spec": _SPEC})])
+    if _retried(messages):
+        return ModelResponse(parts=[TextPart(_draft(returned))])
+    return ModelResponse(
+        parts=[TextPart("Net revenue for the quarter came to 9,999,999.00 all told.")]
+    )
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_structural_check_runs_when_the_model_forgets(alpenglow_db):
+    service = _service(alpenglow_db)
+    try:
+        turn = run_question(
+            service, _SPEC["question"], model=FunctionModel(_forgetful), session_key="t-forget"
+        )
+    finally:
+        service.close()
+    assert turn.error is None, turn.error
+    assert [c.name for c in turn.tool_calls] == ["get_context", "query_metrics", "log_answer"]
+    check = turn.tool_calls[-1]
+    assert check.args["via"] == "structural" and check.status == "pass"
+    assert turn.log_answer is not None and turn.log_answer.status == "pass"
+    assert (
+        turn.log_answer.how_to_read is not None
+        and "addressed to the user" in turn.log_answer.how_to_read
+    )
+    assert "Net revenue by month was" in turn.answer
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_structural_check_sends_an_unsourced_reply_back_once(alpenglow_db):
+    service = _service(alpenglow_db)
+    try:
+        turn = run_question(
+            service, _SPEC["question"], model=FunctionModel(_sloppy), session_key="t-sloppy"
+        )
+    finally:
+        service.close()
+    assert turn.error is None, turn.error
+    names = [c.name for c in turn.tool_calls]
+    assert names == ["get_context", "query_metrics", "log_answer", "log_answer"]
+    assert [c.status for c in turn.tool_calls[2:]] == ["unsourced_numbers", "pass"]
+    assert all(c.args["via"] == "structural" for c in turn.tool_calls[2:])
+    assert "9,999,999" not in turn.answer
+    assert "Net revenue by month was" in turn.answer
+    assert turn.log_answer is not None and turn.log_answer.status == "pass"
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_structural_check_is_off_in_byo_mode_and_when_asked(alpenglow_db):
+    service = _service(alpenglow_db)
+    try:
+        byo = run_question(
+            service, _SPEC["question"], model=FunctionModel(_forgetful), session_key="b", byo=True
+        )
+        off = run_question(
+            service,
+            _SPEC["question"],
+            model=FunctionModel(_forgetful),
+            session_key="o",
+            enforce_check=False,
+        )
+    finally:
+        service.close()
+    for turn in (byo, off):
+        assert [c.name for c in turn.tool_calls] == ["get_context", "query_metrics"]
+        assert turn.log_answer is None
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_structural_check_passes_through_a_draft_the_model_already_checked(alpenglow_db):
+    service = _service(alpenglow_db)
+    try:
+        turn = run_question(
+            service, _SPEC["question"], model=FunctionModel(_scripted), session_key="t-ok"
+        )
+    finally:
+        service.close()
+    assert [c.name for c in turn.tool_calls] == ["get_context", "query_metrics", "log_answer"]
+    assert "via" not in turn.tool_calls[-1].args
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_lean_prompt_is_the_connector_instructions_plus_two_lines(alpenglow_db):
+    script = _Surfaces()
+    service = _service(alpenglow_db)
+    try:
+        run_question(
+            service, _SPEC["question"], model=FunctionModel(script), session_key="l", prompt="lean"
+        )
+    finally:
+        service.close()
+    assert script.system is not None
+    assert script.system.startswith(connector_instructions(alpenglow_db).strip())
+    assert "Call get_context first." in script.system
+    assert "log_answer" not in script.system.split("\n\n", 1)[1]
+    assert "brief" not in script.system
+    # The harness keeps its own tool docstrings in every prompt variant.
+    assert "The spec fields" in (script.descriptions["query_metrics"] or "")
+
+
+def test_unknown_prompt_is_refused(alpenglow):
+    from understory.harness.agent import build_agent
+    from understory.server.session import SessionStore
+
+    service = _service(alpenglow)
+    try:
+        with pytest.raises(ValueError, match="unknown prompt"):
+            build_agent(
+                service, SessionStore().get("x"), model=FunctionModel(_scripted), prompt="nope"
+            )
+    finally:
+        service.close()
+
+
+@pytest.mark.fake_db
+@pytest.mark.metricflow
+def test_run_evals_repeats_and_counts_per_item(alpenglow_db):
+    wanted = "net_revenue_by_month_q1_2025"
+    items = [i for i in load_golden(alpenglow_db.golden_path) if i.id == wanted]
+    service = _service(alpenglow_db)
+    try:
+        report = run_evals(service, items, model=FunctionModel(_forgetful), repeat=3, prompt="lean")
+    finally:
+        service.close()
+    assert report.repeat == 3 and report.prompt == "lean" and report.enforce_check is True
+    assert report.label == "agent/lean+check"
+    assert [i.run for i in report.items] == [1, 2, 3]
+    assert all(i.passed for i in report.items), [i.reasons for i in report.items]
+    assert report.summary()["by_item"][wanted]["passed"] == 3
+    assert report.summary()["capture_rate"] == 1.0

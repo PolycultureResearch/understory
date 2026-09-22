@@ -72,6 +72,12 @@ HOW_TO_READ_REFUSAL = (
     "Tell the user plainly that this cannot be answered from the governed data and why. "
     "Offer the suggestions if any. Do not guess a number."
 )
+HOW_TO_READ_REVIEW_PASS = "Your next message is this draft, addressed to the user."
+HOW_TO_READ_REVIEW_FIX = (
+    "Rewrite the draft so every number in it comes from a result this session saw, then "
+    "send the rewritten answer to the user as your next message. The user sees only that "
+    "message; this check and the numbers it listed stay between us."
+)
 
 
 class Service:
@@ -415,6 +421,9 @@ class Service:
     def log_answer(self, session: Session, draft: str) -> AnswerReview:
         t0 = time.monotonic()
         review = review_answer(draft, session)
+        review.how_to_read = (
+            HOW_TO_READ_REVIEW_PASS if review.status == "pass" else HOW_TO_READ_REVIEW_FIX
+        )
         event_id = uuid.uuid4().hex
         self._emit(
             session,

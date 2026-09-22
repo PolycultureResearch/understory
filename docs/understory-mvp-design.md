@@ -315,7 +315,7 @@ The harness has four jobs.
 - Serve demos and the sales deck without a client chatbot account.
 - Be the agent the Slack transport wraps.
 
-The harness always calls `get_context` first and `log_answer` last. It is the one place the full loop is enforced, which is why its numbers are an upper bound on what a BYO chatbot achieves. We report both when we have both.
+The harness enforces the closing step in code, not in the prompt: an output validator runs the final reply through `log_answer` when the model did not, and hands an unsourced review back for one more turn. The first live run (`knowledge/step4-close-2026-09-21.md`) is why: asked in the prompt, Sonnet skipped the check on the two long answers and narrated it on a third, while the one-line connector instruction got it every time. The prompt is otherwise a variable under test (`eval --prompt`): `harness` is the original ten rules, `lean` is the connector instructions plus the two lines with evidence behind them. So the harness is not a ceiling and BYO not a floor; they are two prompt surfaces over the same tools, measured against each other, and we report both when we have both. The Slack transport inherits whichever wins.
 
 ## 10. Evaluation
 
