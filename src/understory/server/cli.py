@@ -7,12 +7,12 @@ from pathlib import Path
 
 import typer
 
-from understory.cli import app
+from understory.cli import app, tenant_option
 
 
 @app.command()
 def serve(
-    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    tenant: Path = tenant_option(),
     host: str = typer.Option("127.0.0.1", help="Bind address for HTTP."),
     port: int = typer.Option(8000, help="Port for HTTP."),
     transport: str = typer.Option("http", help="http (streamable HTTP at /mcp) or stdio."),
@@ -43,7 +43,7 @@ def serve(
 
 @app.command()
 def check(
-    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    tenant: Path = tenant_option(),
 ) -> None:
     """Load a tenant end to end: manifest, traps, warehouse, semantic layer. Exit 1 on failure."""
     from understory.server.service import Service

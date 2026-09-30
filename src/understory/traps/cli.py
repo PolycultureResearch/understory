@@ -14,7 +14,13 @@ traps_app = typer.Typer(no_args_is_help=True, help="Traps registry: check a tena
 
 @traps_app.command("check")
 def check_command(
-    tenant_dir: Annotated[Path, typer.Argument(help="Tenant directory holding tenant.yml.")],
+    tenant_dir: Annotated[
+        Path,
+        typer.Argument(
+            envvar="UNDERSTORY_TENANT",
+            help="Tenant directory, its tenant.yml, or a fixture name under tenants/.",
+        ),
+    ],
 ) -> None:
     """Check traps.yml against the tenant's semantic manifest. Exits 1 on any problem."""
     from understory.catalog.manifest import load_catalog

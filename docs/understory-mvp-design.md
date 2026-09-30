@@ -247,14 +247,14 @@ Parquet is the interchange format for everything Understory writes: telemetry, c
 
 One container image, one running container per tenant, configuration mounted. Multi-tenancy inside a process is a source of bugs we do not need to invite for a handful of clients.
 
-A tenant is a directory, and it lives in the client's dbt repository next to the project it describes (ADR 0001). The container mounts it and reads it. A change to a metric, its trap, and its golden question is one pull request the client reviews. The four fake_companies tenants stay in this repository as fixtures.
+A tenant is a directory, and it lives in the client's dbt repository next to the project it describes (ADR 0001). The container mounts it and reads it. Setup, path rules and the container invocation are in [tenant-directory.md](tenant-directory.md). A change to a metric, its trap, and its golden question is one pull request the client reviews. The four fake_companies tenants stay in this repository as fixtures.
 
 ```
 <client dbt repo>/understory/
   tenant.yml            # warehouse connection, semantic layer mode, row caps, schema scope, default window
   context.md            # the get_context document
   traps.yml             # section 5
-  semantic_manifest.json  # produced by the dbt deploy, or a path to the dbt project
+  semantic_manifest.json  # optional: read from the dbt project's target/ when absent
   golden/
     questions.yml       # the trap set, section 10
     realistic.yml       # the realistic set, section 10
@@ -436,7 +436,7 @@ Draft 0.2's steps 1 through 6 are built: catalog and discovery, governed query, 
 3. Gaps. Required `question` and `reason` on `run_sql`, the fallback disclosure, gap records keyed on what was missing, the `gaps` family, `mart_semantic_backlog` over it, abandonment in the eval report.
 4. Realistic set. Generator from seeded ground truth with hand-edited wording, corruption faults in the matrix, over-refusal class, BYO mode, two-model scoring. Drafted 2026-09-14: 85 items across the four tenants with event, quiet and over-refusal kinds, the drafter and the fill command; the prefer-versus-where bug the set exposed is fixed and covered by trap-set items. Closed 2026-09-21: first-turn answer rate and over-refusal rate with a by-kind table in the report, `--byo` mode over the shared connector surfaces, `--tiers` two-model scoring with a comparison table, the volume check in `query_metrics`, and four `fault` items on the two tenants whose marts show a dropout (89 items). Both sets pass deterministically on all four tenants. Notes in `knowledge/step4-close-2026-09-21.md`.
 5. Golden authoring. Draft command from catalog and traps, the data-owner interview skill, snapshot approval with the `verified` flag. Done 2026-09-22: `draft-golden` (traps-aware, fills without a mismatch and passes 100% on all four fake tenants), `verify`, and the `golden-interview` skill.
-6. External tenant mount. Read a tenant directory from a client repository, docs and README for that layout.
+6. External tenant mount. Read a tenant directory from a client repository, docs and README for that layout. Built 2026-09-30: relative paths in `tenant.yml` resolve against the tenant directory, the manifest falls back to the dbt project's `target/`, every command reads `UNDERSTORY_TENANT`, and a compile cache on a read-only mount is skipped. The trap set passes from a copied client repo. Setup in `docs/tenant-directory.md`.
 7. Gap promotion command.
 8. Real users. Friendly stakeholders on a fake tenant through Claude.ai over a tunnel, then Northern Nights on their own data, then a larger company.
 

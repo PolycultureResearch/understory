@@ -13,6 +13,7 @@ invalidates every cached entry.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import shutil
@@ -33,6 +34,8 @@ SQL_MARKER = "SQL (remove --explain"
 it is not matched so a terminal that mangles it does not break parsing."""
 
 COMPILE_TIMEOUT_S = 120
+
+log = logging.getLogger(__name__)
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _SPINNER = re.compile(r"[⠀-⣿]\s*Initiating query…?")
@@ -258,11 +261,15 @@ class MetricFlowLocal:
             return None
 
     def _cache_put(self, spec_hash: str, sql: str) -> None:
+        """Best effort: a read-only tenant mount compiles every time rather than failing."""
         path = self._cache_path(spec_hash)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".sql.tmp")
-        tmp.write_text(sql)
-        tmp.replace(path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".sql.tmp")
+            tmp.write_text(sql)
+            tmp.replace(path)
+        except OSError as e:
+            log.warning("compile cache not written at %s: %s", path.parent, e)
 
     # ----------------------------------------------------------------- compile
 

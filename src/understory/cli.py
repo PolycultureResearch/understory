@@ -9,6 +9,17 @@ app = typer.Typer(
 )
 
 
+def tenant_option() -> typer.models.OptionInfo:
+    """`--tenant`, shared by every command that loads one. The container sets UNDERSTORY_TENANT."""
+    return typer.Option(
+        ...,
+        "--tenant",
+        "-t",
+        envvar="UNDERSTORY_TENANT",
+        help="Tenant directory, its tenant.yml, or a fixture name under tenants/.",
+    )
+
+
 @app.command()
 def version() -> None:
     from understory import __version__
