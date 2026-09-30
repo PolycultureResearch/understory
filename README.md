@@ -30,7 +30,7 @@ Then, in this repo:
 uv sync --all-extras
 uv run understory check --tenant tenants/alpenglow      # manifest, traps, warehouse, freshness
 uv run understory serve --tenant tenants/alpenglow      # MCP over streamable HTTP at :8000/mcp
-uv run pytest                                            # 273 tests; DuckDB and mf tests skip if data is absent
+uv run pytest                                            # 280 tests; DuckDB and mf tests skip if data is absent
 ```
 
 Point any MCP client at `http://127.0.0.1:8000/mcp`. For a chatbot on the internet, run the container and put it behind HTTPS with `auth.mode: static` in `tenant.yml`.
@@ -61,9 +61,9 @@ Python 3.13, the official MCP SDK, open-source MetricFlow, DuckDB and BigQuery, 
 
 ## Status
 
-Steps 1 through 6 of the build sequence (design section 14) are built. That covers harness efficiency, the policy flip, gaps, the realistic set, golden authoring and the external tenant mount. The server, all seven tools, the telemetry package and the harness run end to end against the four fake tenants, and against a tenant mounted from outside this repo. Both golden sets pass deterministically on every tenant. The live path works through OpenRouter in both modes and on both model tiers. On Sonnet with the enforced closing check, alpenglow scores 21/23 on the realistic set and 10/11 on the trap set (`knowledge/harness-last-step-2026-09-22.md`).
+Steps 1 through 7 of the build sequence (design section 14) are built. That covers harness efficiency, the policy flip, gaps, the realistic set, golden authoring, the external tenant mount and gap promotion. The server, all seven tools, the telemetry package and the harness run end to end against the four fake tenants, and against a tenant mounted from outside this repo. Both golden sets pass deterministically on every tenant. The live path works through OpenRouter in both modes and on both model tiers. On Sonnet with the enforced closing check, alpenglow scores 21/23 on the realistic set and 10/11 on the trap set (`knowledge/harness-last-step-2026-09-22.md`).
 
-Next is step 7, the gap promotion command, and then the first friendly users on a fake tenant. Nothing has run against a real client warehouse yet, and connector auth against an identity provider isn't built.
+Next are the first friendly users on a fake tenant, through Claude.ai over a tunnel. Nothing has run against a real client warehouse yet, and connector auth against an identity provider isn't built.
 
 ```bash
 export OPENROUTER_API_KEY=...
@@ -89,6 +89,13 @@ uv run understory draft-golden --tenant tenants/alpenglow --append         # add
 uv run understory fill --tenant tenants/alpenglow --set trap
 uv run understory verify --tenant tenants/alpenglow --list                 # the numbers still to check
 uv run understory verify --tenant tenants/alpenglow net_revenue_2026_05    # a person checked it
+```
+
+Gaps come back as golden items. `promote-gaps` reads `mart_semantic_backlog` and appends one item per gap to the realistic set, with the question, who hit it and how often, what was missing, and the SQL that answered instead. The item stays open, listed by the evals but not scored, until someone builds the metric and adds a spec. Run it weekly; it only adds gaps it has not seen.
+
+```bash
+uv run understory promote-gaps --tenant tenants/alpenglow --relation analytics_understory.mart_semantic_backlog --dry-run
+uv run understory promote-gaps --tenant tenants/alpenglow --db /tmp/understory_dev.duckdb --relation main.mart_semantic_backlog
 ```
 
 The realistic set is drafted, not written from scratch. `draft-realistic` reads the seeded ground truth in the warehouse and writes template questions with correct specs; someone rewrites the wording and adds over-refusal items; `fill` runs every spec once and records the numbers as a snapshot with `verified: false`.

@@ -49,13 +49,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from understory.types import MetricSpec
 
 GoldenStatus = Literal["resolved", "needs_clarification", "unanswerable", "invalid"]
-GoldenKind = Literal["trap", "catalog", "event", "quiet", "over_refusal", "fault"]
+GoldenKind = Literal["trap", "catalog", "event", "quiet", "over_refusal", "fault", "gap"]
 """What an item is for. Trap items guard a declared trap or refusal path; catalog
 items are one canonical question per metric, drafted by `understory draft-golden`. The
 realistic set's kinds: `event` asks about a month where the seeded ground truth
 put something, `quiet` about a month where nothing happened, `over_refusal` is
 an answerable question that looks risky, `fault` a period the warehouse loaded
-only partly, which expects the volume disclosure."""
+only partly, which expects the volume disclosure. A `gap` item is a question
+from the backlog, promoted by `understory promote-gaps`; see `is_open`."""
 
 
 class Expectation(BaseModel):
@@ -100,6 +101,15 @@ class GoldenItem(BaseModel):
     """True once a human checked the numbers against a known report. A snapshot
     taken by running Understory once is `false`: it guards regression, not truth."""
 
+    @property
+    def is_open(self) -> bool:
+        """A promoted gap with no spec yet: the metric it needs is not built.
+
+        The evals list open items and do not score them, and `fill` skips them.
+        Adding the spec closes the item, and from then on it is scored.
+        """
+        return self.kind == "gap" and self.spec is None
+
     def metric_spec(self, *, with_answers: bool = False) -> MetricSpec:
         """The item's spec as a model, optionally carrying the clarification answers."""
         if self.spec is None:
@@ -118,6 +128,11 @@ class GoldenSet(BaseModel):
 
     version: int = 1
     questions: list[GoldenItem] = Field(default_factory=list)
+
+
+def split_open(items: list[GoldenItem]) -> tuple[list[GoldenItem], list[GoldenItem]]:
+    """(items to score, open gaps). See `GoldenItem.is_open`."""
+    return [i for i in items if not i.is_open], [i for i in items if i.is_open]
 
 
 def load_golden(path: str | Path) -> list[GoldenItem]:

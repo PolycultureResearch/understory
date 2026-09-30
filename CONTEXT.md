@@ -55,6 +55,10 @@ _Avoid_: error, decline
 A question the semantic layer could not answer as governed, recorded with what was tried, what was missing, why the answer fell back, and the ad hoc SQL that answered it instead. The unit of the data team's backlog. De-identified by construction so the people who fix it can read it.
 _Avoid_: refusal (a refusal is one outcome; a gap is the record that accumulates), miss, failure
 
+**Open gap**:
+A gap promoted into a tenant's golden set (`understory promote-gaps`) before anyone has built the metric it needs. It has `kind: gap` and no spec. The evals list it and do not score it. Adding the spec closes it, and a passing eval proves it closed.
+_Avoid_: pending item, todo
+
 **Abandonment**:
 An ask that was returned and never resubmitted with a choice. The signal that clarification has become onerous.
 
@@ -102,7 +106,7 @@ The hand-written golden questions per tenant that exercise every declared trap a
 _Avoid_: golden set (ambiguous now that there are two)
 
 **Realistic set**:
-Golden questions per tenant weighted toward what stakeholders actually ask, partly generated from seeded ground truth. Its headline number is first-turn answer rate with correct disclosures: the share of answerable items whose first turn came back with the right numbers and disclosures and no ask in between. Guards adoption. Each item has a kind: `event` (a month the ground truth put something in), `quiet` (a month with nothing), `over_refusal` (answerable but looks risky), `fault` (a period the warehouse loaded only partly; expects the volume disclosure). The report breaks the headline down by kind.
+Golden questions per tenant weighted toward what stakeholders actually ask, partly generated from seeded ground truth. Its headline number is first-turn answer rate with correct disclosures: the share of answerable items whose first turn came back with the right numbers and disclosures and no ask in between. Guards adoption. Each item has a kind: `event` (a month the ground truth put something in), `quiet` (a month with nothing), `over_refusal` (answerable but looks risky), `fault` (a period the warehouse loaded only partly; expects the volume disclosure), `gap` (a question from the backlog, open until its metric is built). The report breaks the headline down by kind.
 _Avoid_: adoption set, generated set
 
 **Snapshot**:

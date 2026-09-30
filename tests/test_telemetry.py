@@ -554,3 +554,23 @@ def test_dbt_build_models_the_log(tmp_path: Path):
     # The events-only side of the warehouse never sees text.
     cols = {r[0] for r in con.execute("describe main.fct_questions").fetchall()}
     assert not cols & TEXT_ONLY_COLUMNS
+    con.close()
+
+    # Gap promotion reads the mart the package just built.
+    from understory.harness.gaps import draft_from_backlog, read_backlog
+    from understory.tenant import DuckDBConfig
+    from understory.warehouse.duckdb import DuckDBWarehouse
+
+    warehouse = DuckDBWarehouse(DuckDBConfig(path=str(db)))
+    try:
+        rows = read_backlog(warehouse, "alpenglow", relation="main.mart_semantic_backlog")
+    finally:
+        warehouse.close()
+    assert {(r.kind, r.key) for r in rows} >= {
+        ("invalid", "order__promo_code"),
+        ("unanswerable", "profit"),
+        ("ungoverned_sql", "main_marts.fct_orders"),
+    }
+    items = {i.source: i for i in draft_from_backlog(rows)}
+    sql_gap = items["gap:ungoverned_sql:main_marts.fct_orders"]
+    assert sql_gap.is_open and "select 1" in sql_gap.notes
