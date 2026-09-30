@@ -85,6 +85,8 @@ uv run understory draft-golden --append  # writes into the client's golden/quest
 uv run understory eval --deterministic
 ```
 
+`understory promote-gaps` appends the backlog's gaps to `golden/realistic.yml` as open items. The file goes through the client's normal review, which is the point where someone reads the question text before it is committed.
+
 The harness writes eval reports to `<tenant>/.evals/`, and the default compile cache sits beside the manifest. Add both to the client's `.gitignore`:
 
 ```

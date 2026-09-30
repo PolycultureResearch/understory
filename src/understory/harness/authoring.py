@@ -11,7 +11,7 @@ rewrites the wording and drops what is dull.
 
 The third source, the data owner, is a conversation, not a command: the
 `golden-interview` skill runs it and turns the transcript into items in the
-same shape. The fourth, gaps, is step 7.
+same shape. The fourth, gaps, is `understory.harness.gaps`.
 
 `set_verified` is the approval step. A snapshot guards regression, not truth,
 until a human has checked it against a known report; the flag records that

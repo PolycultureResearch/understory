@@ -143,16 +143,21 @@ def eval_command(
         run_evals,
         write_report,
     )
-    from understory.harness.golden import load_golden
+    from understory.harness.golden import load_golden, split_open
     from understory.server.service import Service
     from understory.tenant import load_tenant
 
     cfg = load_tenant(tenant)
     path = cfg.golden_set_path(golden_set)
-    items = load_golden(path)
+    items, open_gaps = split_open(load_golden(path))
+    if open_gaps:
+        typer.echo(
+            f"{cfg.name}: {_open_gaps(open_gaps)}, not scored: "
+            + ", ".join(i.id for i in open_gaps)
+        )
     if not items:
-        typer.echo(f"{cfg.name}: no golden questions at {path}")
-        raise typer.Exit(1)
+        typer.echo(f"{cfg.name}: no golden questions to score at {path}")
+        raise typer.Exit(0 if open_gaps else 1)
     if ids:
         known = {i.id for i in items}
         missing = [i for i in ids if i not in known]
@@ -296,6 +301,65 @@ def draft_golden_command(
     typer.echo(f"{cfg.name}: {len(items)} items ({catalog} from the catalog) -> {target}")
 
 
+@app.command("promote-gaps")
+def promote_gaps_command(
+    tenant: Path = tenant_option(),
+    golden_set: str = typer.Option("realistic", "--set", "-s", help="'realistic' or 'trap'."),
+    relation: str = typer.Option(
+        None,
+        "--relation",
+        help="Where the backlog mart lives, e.g. analytics_understory.mart_semantic_backlog.",
+    ),
+    db: Path = typer.Option(
+        None,
+        "--db",
+        help="Read the mart from this DuckDB file (a local dbt_understory build) "
+        "instead of the tenant's warehouse.",
+    ),
+    min_users: int = typer.Option(1, "--min-users", help="Skip gaps fewer people hit."),
+    min_occurrences: int = typer.Option(1, "--min-occurrences", help="Skip rarer gaps."),
+    limit: int = typer.Option(0, "--limit", "-n", help="Only the top N gaps. 0 means all."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the items; write nothing."),
+) -> None:
+    """Draft an open golden item for each gap in mart_semantic_backlog."""
+    from understory.harness.authoring import append_items
+    from understory.harness.gaps import BACKLOG_RELATION, draft_from_backlog, read_backlog
+    from understory.harness.realistic import dump_items, write_items
+    from understory.tenant import DuckDBConfig, load_tenant
+    from understory.warehouse import make_warehouse
+
+    cfg = load_tenant(tenant)
+    target = cfg.golden_set_path(golden_set)
+    source = DuckDBConfig(path=str(db)) if db else cfg.warehouse
+    warehouse = make_warehouse(source, timeout_s=cfg.limits.timeout_s)
+    try:
+        rows = read_backlog(warehouse, cfg.name, relation=relation or BACKLOG_RELATION)
+    finally:
+        close = getattr(warehouse, "close", None)
+        if close:
+            close()
+    items = draft_from_backlog(
+        rows, min_users=min_users, min_occurrences=min_occurrences, limit=limit
+    )
+    typer.echo(f"{cfg.name}: {len(rows)} gaps in the backlog, {len(items)} past the thresholds")
+    if dry_run or not items:
+        if items:
+            typer.echo(dump_items(items).split("questions:\n", 1)[1])
+        return
+    if target.exists():
+        added = append_items(target, items)
+    else:
+        header = (
+            f"{cfg.display_name} {golden_set} set. Gap items come from the backlog and\n"
+            "stay open until someone builds the metric and adds a spec."
+        )
+        write_items(target, items, header=header)
+        added = items
+    typer.echo(f"{len(added)} new, {len(items) - len(added)} already there -> {target}")
+    for item in added:
+        typer.echo(f"  {item.id}: {item.question}")
+
+
 @app.command("verify")
 def verify_command(
     tenant: Path = tenant_option(),
@@ -341,14 +405,16 @@ def fill_command(
     write: bool = typer.Option(True, help="Write the statuses and numbers back into the file."),
 ) -> None:
     """Run every spec through the service once and record what it returned."""
-    from understory.harness.golden import load_golden
+    from understory.harness.golden import load_golden, split_open
     from understory.harness.realistic import fill_numbers, patch_expected
     from understory.server.service import Service
     from understory.tenant import load_tenant
 
     cfg = load_tenant(tenant)
     path = cfg.golden_set_path(golden_set)
-    items = load_golden(path)
+    items, open_gaps = split_open(load_golden(path))
+    if open_gaps:
+        typer.echo(f"skipping {_open_gaps(open_gaps)}: " + ", ".join(i.id for i in open_gaps))
     if not items:
         typer.echo(f"{cfg.name}: nothing at {path}")
         raise typer.Exit(1)
@@ -376,6 +442,10 @@ def fill_command(
     if mismatched:
         typer.echo(f"{len(mismatched)} items did not do what they expect: {mismatched}")
         raise typer.Exit(1)
+
+
+def _open_gaps(items: list) -> str:
+    return f"{len(items)} open {'gap' if len(items) == 1 else 'gaps'}"
 
 
 def _usage_line(usage: dict[str, float]) -> str:
