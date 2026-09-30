@@ -1,15 +1,22 @@
 """Tenant configuration: one directory per client.
 
-    tenants/<name>/
+    <client dbt repo>/understory/     (or tenants/<name>/ for the fixtures)
       tenant.yml              this file's schema
       context.md              hand-written business context for get_context
       traps.yml               traps registry (understory.traps)
-      semantic_manifest.json  from `dbt parse`, copied in by the deploy
+      semantic_manifest.json  from `dbt parse`; optional, see manifest_path
       golden/questions.yml    trap set (understory.harness)
       golden/realistic.yml    realistic set (understory.harness)
 
 Environment variables are expanded in string values with `${VAR}` or
 `${VAR:-default}` so the same tenant.yml works locally and in a container.
+
+Relative paths to things the tenant reads (the DuckDB file, the dbt project,
+profiles, credentials, the manifest, the compile cache) resolve against the
+tenant directory, so a tenant inside a client repo can say
+`dbt_project_dir: ..` and work wherever the repo is checked out or mounted.
+Log prefixes are outputs and stay relative to the working directory: a
+mounted client repo is no place for the log.
 """
 
 from __future__ import annotations
@@ -58,7 +65,8 @@ class MetricFlowLocalConfig(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     """Extra environment for the mf subprocess, e.g. FAKE_DB."""
     cache_dir: str | None = None
-    """Compiled SQL cache keyed by spec hash. Defaults to <tenant>/.cache."""
+    """Compiled SQL cache keyed by spec hash. Defaults to .cache/mf beside the manifest.
+    A cache that cannot be written (a read-only mount) is skipped, not fatal."""
 
 
 class DbtCloudConfig(BaseModel):
@@ -149,13 +157,30 @@ class TenantConfig(BaseModel):
     checks: Checks = Field(default_factory=Checks)
     instructions: str | None = None
     """Short text for the MCP server `instructions` field."""
+    manifest: str | None = None
+    """Path to semantic_manifest.json when it is not in the tenant directory."""
 
     # Filled in by load()
     root: Path = Field(default=Path("."), exclude=True)
 
     @property
     def manifest_path(self) -> Path:
-        return self.root / "semantic_manifest.json"
+        """The first of: `manifest`, the tenant directory's copy, the dbt project's target/.
+
+        The last one is what `dbt parse` leaves behind, so a tenant that sits
+        in the dbt repo needs no copy step. With none present the tenant
+        directory's path is returned, and loading it names the missing file.
+        """
+        if self.manifest:
+            return self.root / self.manifest
+        local = self.root / "semantic_manifest.json"
+        if local.exists():
+            return local
+        if isinstance(self.semantic_layer, MetricFlowLocalConfig):
+            built = Path(self.semantic_layer.dbt_project_dir) / "target" / "semantic_manifest.json"
+            if built.exists():
+                return built
+        return local
 
     @property
     def context_path(self) -> Path:
@@ -182,20 +207,57 @@ class TenantConfig(BaseModel):
         raise ValueError(f"unknown golden set {name!r}; expected 'trap' or 'realistic'")
 
 
-def load_tenant(path: str | Path) -> TenantConfig:
-    """Load a tenant from its directory or its tenant.yml."""
-    p = Path(path)
+def _anchor(value: str | None, root: Path) -> str | None:
+    """`value` made absolute against `root` when it is a relative filesystem path."""
+    if not value or value == ":memory:" or "://" in value or value.startswith("md:"):
+        return value  # in-memory DuckDB, a URL, a MotherDuck database
+    p = Path(value).expanduser()
+    return value if p.is_absolute() else str((root / p).resolve())
+
+
+def _anchor_paths(cfg: TenantConfig) -> None:
+    root = cfg.root
+    wh, sl = cfg.warehouse, cfg.semantic_layer
+    if isinstance(wh, DuckDBConfig):
+        wh.path = _anchor(wh.path, root)
+    else:
+        wh.credentials_file = _anchor(wh.credentials_file, root)
+    if isinstance(sl, MetricFlowLocalConfig):
+        sl.dbt_project_dir = _anchor(sl.dbt_project_dir, root)
+        sl.profiles_dir = _anchor(sl.profiles_dir, root)
+        sl.cache_dir = _anchor(sl.cache_dir, root)
+    cfg.manifest = _anchor(cfg.manifest, root)
+
+
+def resolve_tenant(arg: str | Path) -> Path:
+    """The tenant.yml for a directory, a tenant.yml, or a fixture name under tenants_dir()."""
+    p = Path(arg).expanduser()
     if p.is_dir():
         p = p / "tenant.yml"
+    if p.is_file():
+        return p
+    named = tenants_dir() / str(arg) / "tenant.yml"
+    if os.sep not in str(arg) and named.is_file():
+        return named
+    raise FileNotFoundError(
+        f"no tenant at {arg!r}: expected a directory holding tenant.yml, a tenant.yml, "
+        f"or a tenant name under {tenants_dir()}"
+    )
+
+
+def load_tenant(path: str | Path) -> TenantConfig:
+    """Load a tenant from its directory, its tenant.yml, or its name under tenants_dir()."""
+    p = resolve_tenant(path)
     raw = yaml.safe_load(p.read_text())
     raw = expand_env(raw)
     cfg = TenantConfig.model_validate(raw)
     cfg.root = p.parent.resolve()
+    _anchor_paths(cfg)
     return cfg
 
 
 def tenants_dir() -> Path:
-    """Where tenants live. Override with UNDERSTORY_TENANTS_DIR."""
+    """Where named tenants live. Override with UNDERSTORY_TENANTS_DIR."""
     env = os.environ.get("UNDERSTORY_TENANTS_DIR")
     if env:
         return Path(env)

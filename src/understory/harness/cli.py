@@ -34,7 +34,7 @@ from pathlib import Path
 
 import typer
 
-from understory.cli import app
+from understory.cli import app, tenant_option
 
 harness_help = "Harness: ask one question or run a tenant's golden set."
 
@@ -42,7 +42,7 @@ harness_help = "Harness: ask one question or run a tenant's golden set."
 @app.command()
 def ask(
     question: str = typer.Argument(..., help="The question to ask."),
-    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    tenant: Path = tenant_option(),
     model: str = typer.Option(None, "--model", "-m", help="OpenRouter model id."),
     answer: list[str] = typer.Option(
         None,
@@ -92,7 +92,7 @@ def ask(
 
 @app.command("eval")
 def eval_command(
-    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    tenant: Path = tenant_option(),
     model: list[str] = typer.Option(
         None, "--model", "-m", help="OpenRouter model id. Repeat to score several."
     ),
@@ -207,7 +207,7 @@ def eval_command(
 
 @app.command("draft-realistic")
 def draft_realistic_command(
-    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    tenant: Path = tenant_option(),
     out: Path = typer.Option(
         None, "--out", "-o", help="Where to write. Default golden/realistic.yml."
     ),
@@ -251,7 +251,7 @@ def draft_realistic_command(
 
 @app.command("draft-golden")
 def draft_golden_command(
-    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    tenant: Path = tenant_option(),
     out: Path = typer.Option(
         None, "--out", "-o", help="Where to write. Default golden/questions.yml."
     ),
@@ -298,7 +298,7 @@ def draft_golden_command(
 
 @app.command("verify")
 def verify_command(
-    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    tenant: Path = tenant_option(),
     ids: list[str] = typer.Argument(None, help="Item ids to mark. None with --list to review."),
     golden_set: str = typer.Option("trap", "--set", "-s", help="'trap' or 'realistic'."),
     clear: bool = typer.Option(False, "--clear", help="Clear the flag instead of setting it."),
@@ -336,7 +336,7 @@ def verify_command(
 
 @app.command("fill")
 def fill_command(
-    tenant: Path = typer.Option(..., "--tenant", "-t", help="Tenant directory or tenant.yml."),
+    tenant: Path = tenant_option(),
     golden_set: str = typer.Option("realistic", "--set", "-s", help="'trap' or 'realistic'."),
     write: bool = typer.Option(True, help="Write the statuses and numbers back into the file."),
 ) -> None:

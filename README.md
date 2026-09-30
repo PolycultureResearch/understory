@@ -10,6 +10,7 @@ The billable work at each client is the dbt model and semantic layer. Understory
 
 - [Design](docs/understory-mvp-design.md), draft 0.3. Tools, the traps registry, gaps, semantic layer and warehouse adapters, identity and logging, the two eval sets, and the build sequence.
 - [Glossary](CONTEXT.md). The vocabulary the design and code use. [Decisions](docs/adr/) records the ones that were hard to reverse. [Knowledge](knowledge/) holds dated measurements.
+- [Setting up a tenant](docs/tenant-directory.md). How a client's tenant directory sits in their dbt repo, how its paths resolve, and how the container mounts it.
 - [Roadmap](docs/understory-roadmap.md). What comes after the MVP and why it waits, including the Breakdown-based explanation engine for "why did X change" questions.
 - [Architecture draft 0.1](agentic-analytics-architecture.md). The original design. The design supersedes its sections 3 through 8.
 
@@ -29,7 +30,7 @@ Then, in this repo:
 uv sync --all-extras
 uv run understory check --tenant tenants/alpenglow      # manifest, traps, warehouse, freshness
 uv run understory serve --tenant tenants/alpenglow      # MCP over streamable HTTP at :8000/mcp
-uv run pytest                                            # 200 tests; DuckDB and mf tests skip if data is absent
+uv run pytest                                            # 273 tests; DuckDB and mf tests skip if data is absent
 ```
 
 Point any MCP client at `http://127.0.0.1:8000/mcp`. For a chatbot on the internet, run the container and put it behind HTTPS with `auth.mode: static` in `tenant.yml`.
@@ -45,12 +46,14 @@ src/understory/
   warehouse/   Warehouse: duckdb, bigquery
   guard/       sqlglot read-only SQL guard for run_sql
   telemetry/   write-only Parquet log in three families (events, text, gaps), HMAC user hashing
-  harness/     Pydantic AI agent over OpenRouter, trap and realistic sets, eval runner, realistic-set drafting
+  harness/     Pydantic AI agent over OpenRouter, trap and realistic sets, eval runner, golden and realistic drafting
 dbt_understory/  dbt package modeling the log: fct_questions, fct_sessions, mart_eval_daily, ...
 tenants/         one directory per client; four fake_companies tenants committed
 ```
 
-A tenant is a directory: `tenant.yml`, `context.md`, `traps.yml`, `semantic_manifest.json`, and `golden/` with two sets: `questions.yml` (the trap set, guards correctness) and `realistic.yml` (the realistic set, guards adoption). The fake tenants here are fixtures; a client's tenant lives in their own dbt repository.
+A tenant is a directory holding `tenant.yml`, `context.md`, `traps.yml` and `golden/`. The golden directory has two sets. `questions.yml` is the trap set and guards correctness. `realistic.yml` is the realistic set and guards adoption. The semantic manifest can sit in the tenant directory or come from the dbt project's `target/`. The fake tenants here are fixtures. A client's tenant lives in their own dbt repository, usually as `understory/` beside `dbt_project.yml`, and [docs/tenant-directory.md](docs/tenant-directory.md) covers the setup.
+
+Every command takes `--tenant` as a directory, a `tenant.yml`, or a fixture name (`--tenant alpenglow`), and falls back to `UNDERSTORY_TENANT`. Relative paths in `tenant.yml` resolve against the tenant directory, so `dbt_project_dir: ..` works wherever the client repo is checked out or mounted.
 
 ## Stack
 
@@ -58,7 +61,9 @@ Python 3.13, the official MCP SDK, open-source MetricFlow, DuckDB and BigQuery, 
 
 ## Status
 
-Steps 1 through 4 of the build sequence (design section 14) are merged: harness efficiency, the policy flip, gaps, and the realistic set. The server, all seven tools, the telemetry package, and the harness work end to end against the four fake tenants. Both golden sets pass deterministically on every tenant, and the live path is verified through OpenRouter in both modes and on both model tiers. Next: golden authoring tooling, the external tenant mount, and gap promotion, then the first friendly users. Not yet done: a deployment against a real client warehouse, and connector auth against an identity provider.
+Steps 1 through 6 of the build sequence (design section 14) are built. That covers harness efficiency, the policy flip, gaps, the realistic set, golden authoring and the external tenant mount. The server, all seven tools, the telemetry package and the harness run end to end against the four fake tenants, and against a tenant mounted from outside this repo. Both golden sets pass deterministically on every tenant. The live path works through OpenRouter in both modes and on both model tiers. On Sonnet with the enforced closing check, alpenglow scores 21/23 on the realistic set and 10/11 on the trap set (`knowledge/harness-last-step-2026-09-22.md`).
+
+Next is step 7, the gap promotion command, and then the first friendly users on a fake tenant. Nothing has run against a real client warehouse yet, and connector auth against an identity provider isn't built.
 
 ```bash
 export OPENROUTER_API_KEY=...
