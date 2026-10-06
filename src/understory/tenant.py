@@ -97,6 +97,10 @@ class Checks(BaseModel):
     """A period under this share of its baseline is low."""
     volume_min_rows: int = 20
     """Baselines below this are too sparse to judge."""
+    spec_disclosures: bool = False
+    """Disclose a non-preferred trap candidate the spec names even when the
+    trap's phrase is not in the question the chatbot sent. Off until the
+    off/on eval says what it buys and what it costs. See `understory.traps.match`."""
 
 
 class SqlScope(BaseModel):

@@ -211,6 +211,7 @@ class Service:
             self.registry,
             self.catalog,
             max_clarifications=self.tenant.limits.max_clarifications,
+            spec_disclosures=self.tenant.checks.spec_disclosures,
         )
         for c in spec.clarifications:
             self._emit(session, ClarificationApplied, trap_id=c.trap, choice=c.choice)
