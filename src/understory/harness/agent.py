@@ -157,6 +157,9 @@ class ToolCallRecord(BaseModel):
     """A short summary of the arguments, not necessarily the full payload."""
     status: str = "ok"
     """Status the tool reported, or `ok` for tools with no status."""
+    spec: dict[str, Any] | None = None
+    """The whole spec a query_metrics call sent, question included, for the
+    oracle replay (`harness.replay`). None on every other tool."""
 
 
 class ClarificationAsked(BaseModel):
@@ -207,8 +210,10 @@ class Trace:
     """The draft the last log_answer call checked, so the structural check can
     tell a reply the model already checked from one it did not."""
 
-    def record(self, name: str, args: dict[str, Any], status: str) -> None:
-        self.calls.append(ToolCallRecord(name=name, args=args, status=status))
+    def record(
+        self, name: str, args: dict[str, Any], status: str, spec: dict[str, Any] | None = None
+    ) -> None:
+        self.calls.append(ToolCallRecord(name=name, args=args, status=status, spec=spec))
         self.statuses.append(status)
 
     def absorb(self, response: ToolResponse) -> None:
@@ -393,7 +398,12 @@ def build_agent(
         """
         response = service.query_metrics(session, spec)
         tr.absorb(response)
-        tr.record("query_metrics", _spec_summary(spec), str(response.status))
+        tr.record(
+            "query_metrics",
+            _spec_summary(spec),
+            str(response.status),
+            spec=spec.model_dump(mode="json"),
+        )
         return response.model_dump(mode="json")
 
     def run_sql(sql: str, question: str, reason: str) -> dict[str, Any]:
