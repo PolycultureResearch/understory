@@ -465,7 +465,7 @@ def _disclose_named(
             text += f" '{phrase}' can also mean {others}."
             if trap.why:
                 text = f"{text} {_sentence(trap.why)}"
-        disclosures.append(Disclosure(text=text, source=f"{SPEC_SOURCE}{trap.id}"))
+        disclosures.append(Disclosure(text=text, source=f"{SPEC_SOURCE}{trap.id}", candidate=name))
 
 
 def _others(candidates: list[str], named: str, catalog: Catalog, hints: dict[str, str]) -> str:

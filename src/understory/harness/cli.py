@@ -124,6 +124,12 @@ def eval_command(
         "--enforce-check/--no-enforce-check",
         help="Run the closing check on the reply when the model did not. Off in BYO mode.",
     ),
+    spec_disclosures: str = typer.Option(
+        None,
+        "--spec-disclosures",
+        help="Override the tenant's checks.spec_disclosures: 'off', 'on', or 'both' to run "
+        "every model twice and compare.",
+    ),
     concurrency: int = typer.Option(
         1, "--concurrency", "-c", help="Items in flight at once. Keep it at 1 to watch the spend."
     ),
@@ -143,6 +149,7 @@ def eval_command(
         BudgetError,
         EvalReport,
         compare,
+        compare_replay,
         run_evals,
         write_report,
     )
@@ -171,13 +178,17 @@ def eval_command(
     if limit:
         items = items[:limit]
     models = list(TIERS) if tiers else (model or [DEFAULT_MODEL])
+    arms = _spec_arms(spec_disclosures, cfg.checks.spec_disclosures)
 
     reports: list[EvalReport] = []
     service = Service(cfg)
     try:
-        if deterministic:
-            reports.append(run_deterministic(service, items))
-        else:
+        for arm in arms:
+            # The service reads the switch on every query, so one service runs both arms.
+            cfg.checks.spec_disclosures = arm
+            if deterministic:
+                reports.append(run_deterministic(service, items))
+                continue
             for name in models:
                 reports.append(
                     run_evals(
@@ -209,6 +220,8 @@ def eval_command(
             typer.echo(f"report: {path}")
     if len(reports) > 1:
         typer.echo(compare(reports))
+        if not deterministic:
+            typer.echo(compare_replay(reports))
     if any(report.summary()["failures"] for report in reports):
         raise typer.Exit(1)
 
@@ -447,6 +460,16 @@ def fill_command(
     if mismatched:
         typer.echo(f"{len(mismatched)} items did not do what they expect: {mismatched}")
         raise typer.Exit(1)
+
+
+def _spec_arms(choice: str | None, tenant_default: bool) -> list[bool]:
+    """The spec-disclosure settings to run, in order. None keeps the tenant's own."""
+    if choice is None:
+        return [tenant_default]
+    arms = {"off": [False], "on": [True], "both": [False, True]}.get(choice.strip().lower())
+    if arms is None:
+        raise typer.BadParameter(f"--spec-disclosures must be off, on or both, got {choice!r}")
+    return arms
 
 
 def _open_gaps(items: list) -> str:
