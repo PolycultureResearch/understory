@@ -86,7 +86,18 @@ _SUFFIX_SCALE = {
 
 METRIC_NAMES = ("coverage", "resolution", "answer", "disclosure", "capture", "clean")
 
-KIND_ORDER = ("event", "quiet", "over_refusal", "fault", "gap", "trap", "catalog")
+KIND_ORDER = (
+    "event",
+    "quiet",
+    "over_refusal",
+    "fault",
+    "gap",
+    "trap",
+    "catalog",
+    "carry_over",
+    "synonym",
+    "explicit",
+)
 """Report order for the by-kind table. Unknown kinds follow, alphabetically."""
 
 EvalMode = Literal["agent", "byo", "deterministic"]
@@ -145,6 +156,8 @@ class ItemScore(BaseModel):
     run: int = 1
     """Which repeat this score came from, 1-based."""
 
+    turns: int = 1
+    """User turns the item ran: the earlier ones, the question, and a clarification reply."""
     queries: int = 0
     """query_metrics calls across every turn of the item."""
     bypasses: list[Bypass] = Field(default_factory=list)
@@ -523,7 +536,9 @@ def run_evals(
         enforce_check = not byo
     runs = [(item, n) for n in range(1, repeat + 1) for item in items]
     if isinstance(model, str):
-        check_budget(len(runs), api_key=api_key, per_item=budget_per_item, force=force, echo=echo)
+        # A multi-turn item costs about one item per user turn.
+        turns = sum(1 + len(item.earlier) for item, _ in runs)
+        check_budget(turns, api_key=api_key, per_item=budget_per_item, force=force, echo=echo)
 
     started = datetime.now(UTC)
     name = model_id(model)
@@ -615,9 +630,41 @@ def _score_agent_item(
     exp = item.expected
     key = f"eval:{item.id}:{run}"
     variant = {"byo": byo, "prompt": prompt, "enforce_check": enforce_check}
-    first = run_question(
-        service, item.question, model=model, api_key=api_key, session_key=key, **variant
-    )
+
+    # A multi-turn item's earlier turns run in the same conversation and session
+    # and are not scored; `first` is the turn the expectations describe.
+    setup: list[Turn] = []
+    history: list[Any] | None = None
+    for text in item.earlier:
+        turn = run_question(
+            service,
+            text,
+            model=model,
+            api_key=api_key,
+            session_key=key,
+            message_history=history,
+            **variant,
+        )
+        setup.append(turn)
+        if turn.error:
+            break
+        history = turn.messages
+    if setup and setup[-1].error:
+        first = Turn(
+            question=item.question,
+            error=f"earlier turn {len(setup)} failed: {setup[-1].error}",
+            error_status=setup[-1].error_status,
+        )
+    else:
+        first = run_question(
+            service,
+            item.question,
+            model=model,
+            api_key=api_key,
+            session_key=key,
+            message_history=history,
+            **variant,
+        )
 
     asked = [c.trap for c in first.clarifications]
     final = first
@@ -632,17 +679,20 @@ def _score_agent_item(
             **variant,
         )
 
-    # The clarification reply is the eval's own wording, not the user's, so both
-    # turns replay against the golden question.
-    conversation = [(item.question, first)]
+    # Each turn replays against everything the user had said by then. The
+    # clarification reply is the eval's own wording, not the user's, so it
+    # replays against the same text as the turn it answers.
+    conversation = [(item.said(n), turn) for n, turn in enumerate(setup, start=1)]
+    conversation.append((item.said(), first))
     if final is not first:
-        conversation.append((item.question, final))
+        conversation.append((item.said(), final))
 
     score = ItemScore(
         id=item.id,
         question=item.question,
         kind=item.kind,
         run=run,
+        turns=len(conversation),
         queries=sum(len(_sent_specs(t)) for _, t in conversation),
         bypasses=replay_turns(
             [(oracle, _sent_specs(t)) for oracle, t in conversation],
@@ -660,7 +710,7 @@ def _score_agent_item(
         ),
         answer_text=final.answer,
         log_answer_status=final.log_answer.status if final.log_answer else None,
-        usage=_merge_usage(first, final),
+        usage=_merge_usage([t for _, t in conversation]),
         elapsed_ms=int((time.monotonic() - t0) * 1000),
         error=final.error or first.error,
         error_status=final.error_status or first.error_status,
@@ -846,10 +896,11 @@ def _sent_specs(turn: Turn) -> list[dict[str, Any]]:
     return [c.spec for c in turn.tool_calls if c.name == "query_metrics" and c.spec is not None]
 
 
-def _merge_usage(first: Turn, final: Turn) -> dict[str, float]:
-    out = dict(first.usage)
-    if final is not first:
-        for k, v in final.usage.items():
+def _merge_usage(turns: list[Turn]) -> dict[str, float]:
+    """Usage summed over every turn of an item, earlier turns included."""
+    out: dict[str, float] = {}
+    for turn in turns:
+        for k, v in turn.usage.items():
             out[k] = out.get(k, 0) + v
     return out
 

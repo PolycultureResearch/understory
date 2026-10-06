@@ -108,7 +108,10 @@ def eval_command(
         False, "--deterministic", help="Run the specs through the service with no model."
     ),
     golden_set: str = typer.Option(
-        "trap", "--set", "-s", help="Which golden set: 'trap' (questions.yml) or 'realistic'."
+        "trap",
+        "--set",
+        "-s",
+        help="Which golden set: 'trap' (questions.yml), 'realistic' or 'multiturn'.",
     ),
     limit: int = typer.Option(0, "--limit", "-n", help="Only the first N items. 0 means all."),
     ids: list[str] = typer.Option(None, "--id", help="Only these item ids. Repeatable."),
@@ -401,7 +404,9 @@ def verify_command(
 @app.command("fill")
 def fill_command(
     tenant: Path = tenant_option(),
-    golden_set: str = typer.Option("realistic", "--set", "-s", help="'trap' or 'realistic'."),
+    golden_set: str = typer.Option(
+        "realistic", "--set", "-s", help="'trap', 'realistic' or 'multiturn'."
+    ),
     write: bool = typer.Option(True, help="Write the statuses and numbers back into the file."),
 ) -> None:
     """Run every spec through the service once and record what it returned."""

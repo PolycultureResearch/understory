@@ -431,6 +431,9 @@ def dump_items(items: list[GoldenItem], *, header: str = "") -> str:
     for item in items:
         lines.append(f"  - id: {item.id}")
         lines.append(f"    question: {_q(item.question)}")
+        if item.earlier:
+            lines.append("    earlier:")
+            lines.extend(f"      - {_q(text)}" for text in item.earlier)
         if item.kind:
             lines.append(f"    kind: {item.kind}")
         if item.source:

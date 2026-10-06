@@ -202,13 +202,21 @@ class TenantConfig(BaseModel):
     def realistic_path(self) -> Path:
         return self.root / "golden" / "realistic.yml"
 
+    @property
+    def multiturn_path(self) -> Path:
+        return self.root / "golden" / "multiturn.yml"
+
     def golden_set_path(self, name: str) -> Path:
-        """`trap` or `realistic`."""
+        """`trap`, `realistic` or `multiturn`."""
         if name == "trap":
             return self.golden_path
         if name == "realistic":
             return self.realistic_path
-        raise ValueError(f"unknown golden set {name!r}; expected 'trap' or 'realistic'")
+        if name == "multiturn":
+            return self.multiturn_path
+        raise ValueError(
+            f"unknown golden set {name!r}; expected 'trap', 'realistic' or 'multiturn'"
+        )
 
 
 def _anchor(value: str | None, root: Path) -> str | None:

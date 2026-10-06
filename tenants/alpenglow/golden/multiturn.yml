@@ -1,0 +1,195 @@
+# Alpenglow Supply Co. multi-turn set.
+#
+# Ten conversations that test whether a trap still does its job when the trap
+# word and the query are not in the same message. `earlier` holds the user
+# turns before `question`; they run in the same conversation and are not
+# scored. `question` is the last turn and the one `expected` describes.
+#
+# kind says how the trap word reaches the model:
+#   carry_over  the word is in an earlier turn only, the query is a follow-up
+#   synonym     a phrase the model is likely to tidy before it sends the spec
+#   explicit    the user names a non-preferred candidate outright; nothing
+#               should be swapped or asked
+#
+# Each spec is what the last turn should resolve to. The deterministic run
+# sends it with everything the user said as the question, so the numbers below
+# are what a traps check that could hear the user would return. Snapshots from
+# `understory fill --set multiturn`; none is verified.
+version: 1
+
+questions:
+  # ---------------------------------------------------------------- carry-over
+  - id: revenue_then_by_country
+    question: "Split that by country."
+    earlier:
+      - "What was revenue in the first quarter of 2025?"
+    kind: carry_over
+    notes: >
+      The case from the grill. The first turn fires the revenue collision. The
+      follow-up carries no trap word, so the server sees a bare spec. A model
+      that kept net revenue lost only the sentence; one that sent gross
+      revenue got a different number with no disclosure.
+    spec:
+      metrics: [gross_revenue]
+      group_by: [order__country]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["order shipped"]
+      numbers: [385646.15, 185575.5, 271151.75, 2150117.55]
+
+  - id: board_deck_revenue_then_number
+    question: "Give me the number for March 2025."
+    earlier:
+      - "I'm putting together the board deck and need to get the revenue slide right."
+    kind: carry_over
+    notes: >
+      The first turn sets the subject and asks nothing, so no query carries
+      the word. The model has to choose a revenue metric for the second turn
+      on its own, and the question it sends may not say revenue at all.
+    spec:
+      metrics: [gross_revenue]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["net revenue"]
+      numbers: [1043396.05]
+
+  - id: margin_context_then_quarter
+    question: "What was it in the second quarter of 2025?"
+    earlier:
+      - "I want to talk about margin for a minute."
+    kind: carry_over
+    notes: >
+      The tenant's one ask, with the word in the first turn only. A correct
+      run still asks. A model that picks a margin metric and sends "what was
+      it in Q2" skips the ask the data owner signed off on.
+    spec:
+      metrics: [gross_margin]
+      time: {start: 2025-04-01, end: 2025-06-30}
+    expected:
+      status: needs_clarification
+      clarification_traps: [collision:margin]
+      answers: {"collision:margin": margin_rate}
+      metrics: [margin_rate]
+      numbers: [0.5821]
+
+  - id: returns_context_then_month
+    question: "How did it look in January 2025?"
+    earlier:
+      - "Let's look at returns."
+    kind: carry_over
+    notes: >
+      Three candidates behind "returns", return rate preferred. The second
+      turn says "it".
+    spec:
+      metrics: [returned_units]
+      time: {start: 2025-01-01, end: 2025-01-31}
+    expected:
+      status: resolved
+      metrics: [return_rate]
+      disclosures: ["return rate"]
+      numbers: [0.0624]
+
+  # ------------------------------------------------------------------- synonym
+  - id: top_line_march_2025
+    question: "What was our top line in March 2025?"
+    kind: synonym
+    notes: >
+      One turn. "Top line" is a declared phrase of the revenue collision and
+      nobody's metric name, so the model is likely to rewrite it. Rewritten as
+      "revenue" the trap still fires; rewritten as "gross revenue" it does not.
+    spec:
+      metrics: [gross_revenue]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["net revenue", "gross revenue"]
+      numbers: [1043396.05]
+
+  - id: sales_january_then_february
+    question: "Same for February."
+    earlier:
+      - "How were sales in January 2025?"
+    kind: synonym
+    notes: >
+      A synonym in the first turn and nothing at all in the second.
+    spec:
+      metrics: [gross_revenue]
+      time: {start: 2025-02-01, end: 2025-02-28}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["net revenue"]
+      numbers: [951335.65]
+
+  - id: top_line_by_country_q1_2025
+    question: "Top line by country for the first quarter of 2025"
+    kind: synonym
+    notes: >
+      One turn, the synonym plus the country role.
+    spec:
+      metrics: [gross_revenue]
+      group_by: [order__country]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [net_revenue]
+      disclosures: ["net revenue", "order shipped"]
+      numbers: [385646.15, 185575.5, 271151.75, 2150117.55]
+
+  # ------------------------------------------------------------------ explicit
+  - id: gross_revenue_then_by_country
+    question: "And by country?"
+    earlier:
+      - "What was gross revenue in March 2025?"
+    kind: explicit
+    notes: >
+      The user asked for gross revenue by name and means it. Nothing is
+      swapped in either turn. With spec-keyed disclosures on, both turns carry
+      a sentence the user did not need; this item measures that cost.
+    spec:
+      metrics: [gross_revenue]
+      group_by: [order__country]
+      time: {start: 2025-03-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [gross_revenue]
+      disclosures: ["order shipped"]
+      numbers: [138239.85, 71659.05, 106955.6, 813607.4]
+
+  - id: margin_rate_then_first_quarter
+    question: "And in the first quarter?"
+    earlier:
+      - "What was margin rate in the second quarter of 2025?"
+    kind: explicit
+    notes: >
+      The user named the rate, so the margin ask must not come back in either
+      turn.
+    spec:
+      metrics: [margin_rate]
+      time: {start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [margin_rate]
+      numbers: [0.5844]
+
+  - id: refunds_then_by_month
+    question: "Break it down by month."
+    earlier:
+      - "How much did we pay out in refunds in the first quarter of 2025?"
+    kind: explicit
+    notes: >
+      Refunds is a non-preferred candidate of the returns collision, named
+      outright. The word "returns" never appears.
+    spec:
+      metrics: [refunds]
+      group_by: [metric_time]
+      time: {grain: month, start: 2025-01-01, end: 2025-03-31}
+    expected:
+      status: resolved
+      metrics: [refunds]
+      numbers: [91040.2, 81809.4, 87065.85]
