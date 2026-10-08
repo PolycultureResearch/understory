@@ -142,6 +142,9 @@ brevity: it cost a disclosure and two checks. Nothing named that it forbids.
 PROMPTS: dict[str, str] = {"harness": SYSTEM_PROMPT, "lean": LEAN_PROMPT}
 """System prompts by name, for `understory eval --prompt`."""
 
+NUMBERS_KEPT = 400
+"""How many of a result's numeric cells the trace keeps per query."""
+
 STRUCTURAL_CHECK = "structural"
 """`ToolCallRecord.args["via"]` on a log_answer call the harness made itself."""
 
@@ -157,6 +160,12 @@ class ToolCallRecord(BaseModel):
     """A short summary of the arguments, not necessarily the full payload."""
     status: str = "ok"
     """Status the tool reported, or `ok` for tools with no status."""
+    spec: dict[str, Any] | None = None
+    """The whole spec a query_metrics call sent, question included, for the
+    oracle replay (`harness.replay`). None on every other tool."""
+    numbers: list[float] = Field(default_factory=list)
+    """Numeric cells a resolved query_metrics call returned, capped at
+    `NUMBERS_KEPT`, so the replay can tell whether a reply reported them."""
 
 
 class ClarificationAsked(BaseModel):
@@ -207,8 +216,17 @@ class Trace:
     """The draft the last log_answer call checked, so the structural check can
     tell a reply the model already checked from one it did not."""
 
-    def record(self, name: str, args: dict[str, Any], status: str) -> None:
-        self.calls.append(ToolCallRecord(name=name, args=args, status=status))
+    def record(
+        self,
+        name: str,
+        args: dict[str, Any],
+        status: str,
+        spec: dict[str, Any] | None = None,
+        numbers: list[float] | None = None,
+    ) -> None:
+        self.calls.append(
+            ToolCallRecord(name=name, args=args, status=status, spec=spec, numbers=numbers or [])
+        )
         self.statuses.append(status)
 
     def absorb(self, response: ToolResponse) -> None:
@@ -393,7 +411,13 @@ def build_agent(
         """
         response = service.query_metrics(session, spec)
         tr.absorb(response)
-        tr.record("query_metrics", _spec_summary(spec), str(response.status))
+        tr.record(
+            "query_metrics",
+            _spec_summary(spec),
+            str(response.status),
+            spec=spec.model_dump(mode="json"),
+            numbers=_numbers(response),
+        )
         return response.model_dump(mode="json")
 
     def run_sql(sql: str, question: str, reason: str) -> dict[str, Any]:
@@ -635,6 +659,21 @@ def _cost(result: Any, usage: Any) -> float | None:
     if isinstance(estimate, int | float | Decimal):
         return float(estimate)
     return None
+
+
+def _numbers(response: ToolResponse) -> list[float]:
+    """The numeric cells of a result, in row order, up to `NUMBERS_KEPT`."""
+    if response.result is None:
+        return []
+    out: list[float] = []
+    for row in response.result.rows:
+        for cell in row:
+            if isinstance(cell, bool) or not isinstance(cell, int | float):
+                continue
+            out.append(float(cell))
+            if len(out) >= NUMBERS_KEPT:
+                return out
+    return out
 
 
 def _spec_summary(spec: MetricSpec | dict[str, Any]) -> dict[str, Any]:

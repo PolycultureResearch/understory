@@ -30,8 +30,10 @@ Then, in this repo:
 uv sync --all-extras
 uv run understory check --tenant tenants/alpenglow      # manifest, traps, warehouse, freshness
 uv run understory serve --tenant tenants/alpenglow      # MCP over streamable HTTP at :8000/mcp
-uv run pytest                                            # 280 tests; DuckDB and mf tests skip if data is absent
+uv run pytest                                            # 323 tests; DuckDB and mf tests skip if data is absent
 ```
+
+CI is minimal while nothing is in production: `ruff` and the tests that need no warehouse. The DuckDB-backed and MetricFlow-backed tests, which include the deterministic evals, run only locally.
 
 Point any MCP client at `http://127.0.0.1:8000/mcp`. For a chatbot on the internet, run the container and put it behind HTTPS with `auth.mode: static` in `tenant.yml`.
 
@@ -46,12 +48,12 @@ src/understory/
   warehouse/   Warehouse: duckdb, bigquery
   guard/       sqlglot read-only SQL guard for run_sql
   telemetry/   write-only Parquet log in three families (events, text, gaps), HMAC user hashing
-  harness/     Pydantic AI agent over OpenRouter, trap and realistic sets, eval runner, golden and realistic drafting
+  harness/     Pydantic AI agent over OpenRouter, trap, realistic and multi-turn sets, eval runner, oracle replay, golden and realistic drafting
 dbt_understory/  dbt package modeling the log: fct_questions, fct_sessions, mart_eval_daily, ...
 tenants/         one directory per client; four fake_companies tenants committed
 ```
 
-A tenant is a directory holding `tenant.yml`, `context.md`, `traps.yml` and `golden/`. The golden directory has two sets. `questions.yml` is the trap set and guards correctness. `realistic.yml` is the realistic set and guards adoption. The semantic manifest can sit in the tenant directory or come from the dbt project's `target/`. The fake tenants here are fixtures. A client's tenant lives in their own dbt repository, usually as `understory/` beside `dbt_project.yml`, and [docs/tenant-directory.md](docs/tenant-directory.md) covers the setup.
+A tenant is a directory holding `tenant.yml`, `context.md`, `traps.yml` and `golden/`. The golden directory has two sets. `questions.yml` is the trap set and guards correctness. `realistic.yml` is the realistic set and guards adoption. Alpenglow also has `multiturn.yml`, ten follow-up questions that test whether a trap still fires once its word has left the question. The semantic manifest can sit in the tenant directory or come from the dbt project's `target/`. The fake tenants here are fixtures. A client's tenant lives in their own dbt repository, usually as `understory/` beside `dbt_project.yml`, and [docs/tenant-directory.md](docs/tenant-directory.md) covers the setup.
 
 Every command takes `--tenant` as a directory, a `tenant.yml`, or a fixture name (`--tenant alpenglow`), and falls back to `UNDERSTORY_TENANT`. Relative paths in `tenant.yml` resolve against the tenant directory, so `dbt_project_dir: ..` works wherever the client repo is checked out or mounted.
 
@@ -68,18 +70,26 @@ Next are the first friendly users on a fake tenant, through Claude.ai over a tun
 ```bash
 export OPENROUTER_API_KEY=...
 uv run understory ask --tenant tenants/alpenglow "How were sales in the US in March 2025?"
-uv run understory eval --tenant tenants/alpenglow --deterministic     # trap set, no LLM, runs in CI
+uv run understory eval --tenant tenants/alpenglow --deterministic     # trap set, no LLM
 uv run understory eval --tenant tenants/alpenglow                     # live, writes tenants/alpenglow/.evals/
 uv run understory eval --tenant tenants/alpenglow --set realistic --deterministic
 uv run understory eval --tenant tenants/alpenglow --set realistic --tiers        # default and cheap model, compared
 uv run understory eval --tenant tenants/alpenglow --set realistic --tiers --byo  # connector surfaces only
 ```
 
-The realistic set's report leads with first-turn answer rate and over-refusal rate, broken down by item kind (`event`, `quiet`, `over_refusal`, `fault`). `--byo` runs the agent on the connector instructions and tool descriptions alone, which is what a client's chatbot sees. The harness runs the closing `log_answer` check itself when the model forgets (`--no-enforce-check` turns that off) and its system prompt is a variable (`--prompt harness|lean`). To measure a prompt change, pick the items that carry the variance and repeat them:
+The realistic set's report leads with first-turn answer rate and over-refusal rate, broken down by item kind (`event`, `quiet`, `over_refusal`, `fault`). `--byo` runs the agent on the connector instructions and tool descriptions alone, which is what a client's chatbot sees. The harness runs the closing `log_answer` check itself when the model forgets (`--no-enforce-check` turns that off) and its system prompt is a variable (`--prompt harness|lean`). Every live report also carries an oracle replay: the traps check rerun on each spec the model sent, with the user's real words from the golden item, naming every trap that fired only then. That is a bypass, a swap, ask or refusal the server missed because the chatbot reworded the question. To measure a prompt change, pick the items that carry the variance and repeat them:
 
 ```bash
 uv run understory eval --tenant tenants/alpenglow --set realistic --repeat 5 \
   --id sales_by_month_2025_q1 --id refunds_why_2024_10 --prompt lean
+```
+
+Traps fire on the question text the chatbot sends, and across turns it often drops the word that matters. On alpenglow's multi-turn set, 42% of runs in BYO mode lost a swap or an ask. `checks.spec_disclosures` is a candidate fix, off by default: a spec that names a non-preferred candidate gets a disclosure whatever the question says. Four hundred runs did not show it improves outcomes, so it stays off; `knowledge/grill-2026-10-05.md` has the critique that led here, the numbers, and what to try next.
+
+```bash
+uv run understory eval --tenant tenants/alpenglow --set multiturn --byo                       # bypass rate, rule off
+uv run understory eval --tenant tenants/alpenglow --set multiturn --tiers --repeat 5 \
+  --spec-disclosures both                                                                     # rule off against on
 ```
 
 A client's trap set starts drafted too. `draft-golden` writes one canonical item per metric and per metric-by-dimension from the catalog, and one item per trap from the registry; `verify` marks the snapshots a person has checked against a known report; the `golden-interview` skill turns an hour with the data owner into the items neither can know.

@@ -97,6 +97,10 @@ class Checks(BaseModel):
     """A period under this share of its baseline is low."""
     volume_min_rows: int = 20
     """Baselines below this are too sparse to judge."""
+    spec_disclosures: bool = False
+    """Disclose a non-preferred trap candidate the spec names even when the
+    trap's phrase is not in the question the chatbot sent. Off until the
+    off/on eval says what it buys and what it costs. See `understory.traps.match`."""
 
 
 class SqlScope(BaseModel):
@@ -198,13 +202,21 @@ class TenantConfig(BaseModel):
     def realistic_path(self) -> Path:
         return self.root / "golden" / "realistic.yml"
 
+    @property
+    def multiturn_path(self) -> Path:
+        return self.root / "golden" / "multiturn.yml"
+
     def golden_set_path(self, name: str) -> Path:
-        """`trap` or `realistic`."""
+        """`trap`, `realistic` or `multiturn`."""
         if name == "trap":
             return self.golden_path
         if name == "realistic":
             return self.realistic_path
-        raise ValueError(f"unknown golden set {name!r}; expected 'trap' or 'realistic'")
+        if name == "multiturn":
+            return self.multiturn_path
+        raise ValueError(
+            f"unknown golden set {name!r}; expected 'trap', 'realistic' or 'multiturn'"
+        )
 
 
 def _anchor(value: str | None, root: Path) -> str | None:

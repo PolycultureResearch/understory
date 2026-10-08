@@ -41,6 +41,18 @@ happened to the spec, never a swap that did not.
 Windows: a `default_window` convention fires when the spec names no dates. The
 spec's time is left untouched and a disclosure names the window; the server
 translates the window id into dates. A window is never asked for.
+
+Spec-keyed disclosures (`spec_disclosures`, off by default): everything above
+reads the trap phrase from `spec.question`, which the chatbot writes. When it
+leaves the question out, tidies "revenue" into "gross revenue", or sends only a
+follow-up, no phrase fires and the matcher cannot tell that from a user who
+asked for gross revenue by name. With the switch on, a trap whose phrase did
+not fire still looks at the spec: a candidate that is not the preferred one
+(or, on an `ask`, any candidate the user did not choose) gets a disclosure
+saying what it is and how the bare phrase is read. Nothing is swapped and
+nothing is asked, because the user may have meant exactly this. These
+disclosures carry the source `spec:<trap id>` and do not appear in `fired`,
+which stays a record of phrases that matched.
 """
 
 from __future__ import annotations
@@ -73,8 +85,13 @@ def check(
     catalog: Catalog,
     *,
     max_clarifications: int,
+    spec_disclosures: bool = False,
 ) -> TrapsOutcome:
-    """Run every trap against the spec. Returns a modified copy of the spec."""
+    """Run every trap against the spec. Returns a modified copy of the spec.
+
+    `spec_disclosures` adds a disclosure for a non-preferred candidate the spec
+    names when the trap's phrase did not fire. See the module docstring.
+    """
     spec = spec.model_copy(deep=True)
     question = normalize(spec.question) if spec.question else ""
     fired: list[str] = []
@@ -97,10 +114,18 @@ def check(
     # against the settled dimensions ("sales in the West": the West becomes
     # order country first, and net revenue, which carries it, then applies).
     for role in registry.dimension_roles:
-        _check_dimension_role(role, spec, question, catalog, fired, clarifications, disclosures)
+        if not _check_dimension_role(
+            role, spec, question, catalog, fired, clarifications, disclosures
+        ):
+            if spec_disclosures:
+                _disclose_named(role, _spec_dimensions(spec), spec, catalog, {}, disclosures)
 
     for collision in registry.collisions:
-        _check_collision(collision, spec, question, catalog, fired, clarifications, disclosures)
+        if not _check_collision(
+            collision, spec, question, catalog, fired, clarifications, disclosures
+        ):
+            if spec_disclosures:
+                _disclose_named(collision, spec.metrics, spec, catalog, collision.hint, disclosures)
 
     for convention in registry.conventions:
         _check_convention(convention, spec, fired, clarifications, disclosures)
@@ -314,7 +339,8 @@ def _check_collision(
     fired: list[str],
     clarifications: list[Clarification],
     disclosures: list[Disclosure],
-) -> None:
+) -> bool:
+    """Apply one collision. False when its phrase did not fire and nothing was done."""
     candidate_terms = _metric_terms(trap.candidates, catalog)
     phrase = _fires(
         trap.phrase,
@@ -325,7 +351,7 @@ def _check_collision(
         ),
     )
     if phrase is None:
-        return
+        return False
 
     if trap.is_ask:
         fired.append(trap.id)
@@ -348,7 +374,7 @@ def _check_collision(
                     priority=trap.priority,
                 )
             )
-            return
+            return True
         _apply_metric(spec, trap, choice, keep=set(), append=True)
         disclosures.append(
             Disclosure(
@@ -356,7 +382,7 @@ def _check_collision(
                 source=trap.id,
             )
         )
-        return
+        return True
 
     preferred = trap.preferred
     assert preferred is not None
@@ -378,7 +404,7 @@ def _check_collision(
 
     present = [m for m in spec.metrics if m in trap.candidates]
     if not present:
-        return  # The spec names none of the candidates; nothing was read as anything.
+        return True  # The spec names none of the candidates; nothing was read as anything.
     fired.append(trap.id)
     if preferred in present:
         text = f"'{phrase}' is read as {_label(preferred, catalog)}."
@@ -395,6 +421,63 @@ def _check_collision(
     else:
         text = f"'{phrase}' is read as {_labels(present, catalog)}, as named."
     disclosures.append(Disclosure(text=text, source=trap.id))
+    return True
+
+
+SPEC_SOURCE = "spec:"
+"""Prefix on the `source` of a spec-keyed disclosure, ahead of the trap id."""
+
+
+def _disclose_named(
+    trap: CollisionTrap | DimensionRoleTrap,
+    named: Iterable[str],
+    spec: MetricSpec,
+    catalog: Catalog,
+    hints: dict[str, str],
+    disclosures: list[Disclosure],
+) -> None:
+    """Disclose each candidate the spec names when the trap's phrase did not fire.
+
+    The preferred candidate is the default reading and says nothing. So does a
+    candidate the user chose in a clarification. Every other one is disclosed:
+    what it is, and how the trap's phrase is read when it stands alone. On an
+    `ask` there is no default, so the sentence names the other candidates and
+    carries the trap's `why`. The spec is not changed.
+    """
+    phrase = normalize(trap.phrase[0])
+    choice = _choice_for(spec, trap.id)
+    is_metric = isinstance(trap, CollisionTrap)
+    seen: set[str] = set()
+    for name in named:
+        if name not in trap.candidates or name in seen:
+            continue
+        seen.add(name)
+        if name in (trap.preferred, choice):
+            continue
+        text = f"This {'is' if is_metric else 'uses'} {_label(name, catalog)}."
+        hint = hints.get(name) or _description(name, catalog)
+        if hint:
+            text = f"{text} {_sentence(hint)}"
+        if trap.preferred is not None:
+            text += f" '{phrase}' on its own is read as {_label(trap.preferred, catalog)}."
+        else:
+            others = _others(trap.candidates, name, catalog, hints)
+            text += f" '{phrase}' can also mean {others}."
+            if trap.why:
+                text = f"{text} {_sentence(trap.why)}"
+        disclosures.append(Disclosure(text=text, source=f"{SPEC_SOURCE}{trap.id}", candidate=name))
+
+
+def _others(candidates: list[str], named: str, catalog: Catalog, hints: dict[str, str]) -> str:
+    """The trap's other candidates with their hints: "Gross Margin (Dollar margin)"."""
+    parts: list[str] = []
+    for c in candidates:
+        if c == named:
+            continue
+        label = _label(c, catalog)
+        hint = hints.get(c) or _description(c, catalog)
+        parts.append(f"{label} ({hint.strip().rstrip('.')})" if hint else label)
+    return " or ".join(parts)
 
 
 def _apply_metric(
@@ -433,7 +516,8 @@ def _check_dimension_role(
     fired: list[str],
     clarifications: list[Clarification],
     disclosures: list[Disclosure],
-) -> None:
+) -> bool:
+    """Apply one dimension role. False when its phrase did not fire and nothing was done."""
     used = _spec_dimensions(spec)
     phrase = _fires(
         trap.phrase,
@@ -442,7 +526,7 @@ def _check_dimension_role(
         covering_terms=_dimension_terms([d for d in used if d not in trap.candidates], catalog),
     )
     if phrase is None:
-        return
+        return False
 
     if trap.is_ask:
         fired.append(trap.id)
@@ -461,11 +545,11 @@ def _check_dimension_role(
                     priority=trap.priority,
                 )
             )
-            return
+            return True
         _apply_dimension(spec, trap, choice)
         text = trap.disclose or f"'{phrase}' is read as {_label(choice, catalog)}, as chosen."
         disclosures.append(Disclosure(text=text, source=trap.id))
-        return
+        return True
 
     preferred = trap.preferred
     assert preferred is not None
@@ -476,7 +560,7 @@ def _check_dimension_role(
 
     present = [d for d in _spec_dimensions(spec) if d in trap.candidates]
     if not present:
-        return  # The spec uses none of the candidates; nothing was read as anything.
+        return True  # The spec uses none of the candidates; nothing was read as anything.
     fired.append(trap.id)
     if preferred in present:
         text = trap.disclose or (
@@ -489,6 +573,7 @@ def _check_dimension_role(
             f"{_labels(blocking, catalog)} does not carry {_label(preferred, catalog)}."
         )
     disclosures.append(Disclosure(text=text, source=trap.id))
+    return True
 
 
 def _apply_dimension(spec: MetricSpec, trap: DimensionRoleTrap, chosen: str) -> None:

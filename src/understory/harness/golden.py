@@ -49,14 +49,32 @@ from pydantic import BaseModel, ConfigDict, Field
 from understory.types import MetricSpec
 
 GoldenStatus = Literal["resolved", "needs_clarification", "unanswerable", "invalid"]
-GoldenKind = Literal["trap", "catalog", "event", "quiet", "over_refusal", "fault", "gap"]
+GoldenKind = Literal[
+    "trap",
+    "catalog",
+    "event",
+    "quiet",
+    "over_refusal",
+    "fault",
+    "gap",
+    "carry_over",
+    "synonym",
+    "explicit",
+]
 """What an item is for. Trap items guard a declared trap or refusal path; catalog
 items are one canonical question per metric, drafted by `understory draft-golden`. The
 realistic set's kinds: `event` asks about a month where the seeded ground truth
 put something, `quiet` about a month where nothing happened, `over_refusal` is
 an answerable question that looks risky, `fault` a period the warehouse loaded
 only partly, which expects the volume disclosure. A `gap` item is a question
-from the backlog, promoted by `understory promote-gaps`; see `is_open`."""
+from the backlog, promoted by `understory promote-gaps`; see `is_open`.
+
+The multi-turn set's kinds say how the trap word reaches the model, which is
+what the oracle replay (`harness.replay`) measures. `carry_over` has it in an
+earlier turn only, so the turn that queries is a bare follow-up. `synonym` uses
+a phrase the model is likely to tidy ("top line"). `explicit` names a
+non-preferred candidate outright, so nothing should be swapped or asked; these
+measure what a spec-keyed disclosure costs when the user meant what they said."""
 
 
 class Expectation(BaseModel):
@@ -89,6 +107,11 @@ class GoldenItem(BaseModel):
 
     id: str
     question: str
+    """The user's message, and on a multi-turn item the last one: the turn that
+    is scored against `expected`."""
+    earlier: list[str] = Field(default_factory=list)
+    """User messages sent before `question`, in order, in the same conversation.
+    They are run and not scored. Empty on a single-turn item."""
     expected: Expectation = Field(default_factory=Expectation)
     spec: dict[str, Any] | None = None
     """The MetricSpec the question should resolve to. Required for the deterministic check."""
@@ -110,12 +133,26 @@ class GoldenItem(BaseModel):
         """
         return self.kind == "gap" and self.spec is None
 
+    def said(self, turn: int | None = None) -> str:
+        """Everything the user has said through user turn `turn` (1-based), joined.
+
+        With no argument, the whole conversation. This is the oracle question:
+        the text a traps check that could hear the user would read.
+        """
+        turns = [*self.earlier, self.question]
+        return " ".join(turns if turn is None else turns[:turn])
+
     def metric_spec(self, *, with_answers: bool = False) -> MetricSpec:
-        """The item's spec as a model, optionally carrying the clarification answers."""
+        """The item's spec as a model, optionally carrying the clarification answers.
+
+        The spec's question defaults to everything the user said, so the
+        deterministic run of a multi-turn item sees the trap word wherever in
+        the conversation it was.
+        """
         if self.spec is None:
             raise ValueError(f"golden item {self.id!r} has no spec")
         raw = dict(self.spec)
-        raw.setdefault("question", self.question)
+        raw.setdefault("question", self.said())
         if with_answers and self.expected.answers:
             raw["clarifications"] = [
                 {"trap": trap, "choice": choice} for trap, choice in self.expected.answers.items()

@@ -149,7 +149,10 @@ class Clarification(BaseModel):
 class Disclosure(BaseModel):
     text: str
     source: str
-    """Trap id, dimension name, or convention name that produced it."""
+    """Trap id, dimension name, or convention name that produced it. A spec-keyed
+    disclosure (`traps.match`) carries `spec:<trap id>`."""
+    candidate: str | None = None
+    """The metric or dimension a spec-keyed disclosure is about. None otherwise."""
 
 
 class Refusal(BaseModel):

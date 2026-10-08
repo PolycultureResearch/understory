@@ -38,6 +38,7 @@ def run_deterministic(service: Service, items: list[GoldenItem]) -> EvalReport:
         tenant=service.tenant.name,
         mode="deterministic",
         model="none",
+        spec_disclosures=service.tenant.checks.spec_disclosures,
         started_at=started,
         finished_at=datetime.now(UTC),
         items=scores,

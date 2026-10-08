@@ -58,6 +58,7 @@ from pydantic_ai.models import Model
 
 from understory.harness.agent import DEFAULT_MODEL, Turn, model_id, run_question
 from understory.harness.golden import GoldenItem
+from understory.harness.replay import Bypass, SentQuery, replay_conversation
 from understory.server.service import Service
 from understory.server.session import extract_numbers
 
@@ -85,7 +86,18 @@ _SUFFIX_SCALE = {
 
 METRIC_NAMES = ("coverage", "resolution", "answer", "disclosure", "capture", "clean")
 
-KIND_ORDER = ("event", "quiet", "over_refusal", "fault", "gap", "trap", "catalog")
+KIND_ORDER = (
+    "event",
+    "quiet",
+    "over_refusal",
+    "fault",
+    "gap",
+    "trap",
+    "catalog",
+    "carry_over",
+    "synonym",
+    "explicit",
+)
 """Report order for the by-kind table. Unknown kinds follow, alphabetically."""
 
 EvalMode = Literal["agent", "byo", "deterministic"]
@@ -144,6 +156,28 @@ class ItemScore(BaseModel):
     run: int = 1
     """Which repeat this score came from, 1-based."""
 
+    turns: int = 1
+    """User turns the item ran: the earlier ones, the question, and a clarification reply."""
+    queries: int = 0
+    """query_metrics calls across every turn of the item."""
+    bypasses: list[Bypass] = Field(default_factory=list)
+    """Traps the user's own words would have fired and the sent specs did not.
+    See `harness.replay`. Always empty in deterministic mode, where the spec
+    carries the golden question."""
+    ambiguous: bool = False
+    """The user's words fired a collision or a dimension role on some sent spec."""
+    silent_wrong: list[str] = Field(default_factory=list)
+    """`trap: candidate` for each silent wrong reading: a non-preferred candidate
+    ran where the user's words would have swapped it or asked, the reply
+    reported that query's number, and the reply never named the candidate."""
+    spec_keyed: int = 0
+    """Disclosures the spec-keyed rule issues for the specs as sent, on or off."""
+    spec_keyed_returned: int = 0
+    """How many of those the server returned. Zero with the tenant switch off."""
+    spec_keyed_relayed: int = 0
+    """How many of the returned ones reached the reply: it names the candidate
+    and the reading the disclosure set it against."""
+
 
 class EvalReport(BaseModel):
     tenant: str
@@ -154,16 +188,22 @@ class EvalReport(BaseModel):
     enforce_check: bool = False
     """Whether the harness ran the closing check itself when the model did not."""
     repeat: int = 1
+    spec_disclosures: bool = False
+    """Whether the tenant's spec-keyed disclosures were on for this run."""
     started_at: datetime
     finished_at: datetime
     items: list[ItemScore] = Field(default_factory=list)
 
     @property
     def label(self) -> str:
-        """`agent/harness+check`, `byo`, `deterministic`: the variant, for tables."""
+        """`agent/harness+check`, `byo`, `deterministic`: the variant, for tables.
+
+        `+spec` is appended when spec-keyed disclosures were on.
+        """
+        spec = "+spec" if self.spec_disclosures else ""
         if self.mode != "agent":
-            return self.mode
-        return f"agent/{self.prompt}{'+check' if self.enforce_check else ''}"
+            return f"{self.mode}{spec}"
+        return f"agent/{self.prompt}{'+check' if self.enforce_check else ''}{spec}"
 
     def summary(self) -> dict[str, Any]:
         n = len(self.items)
@@ -198,6 +238,7 @@ class EvalReport(BaseModel):
         out["abandonment_rate"] = (
             _rate([not i.clarification_resolved for i in asked]) if asked else None
         )
+        out.update(self.bypass_summary())
         out.update(self.usage_summary())
         skipped = [i.id for i in self.items if i.skipped]
         if skipped:
@@ -249,6 +290,57 @@ class EvalReport(BaseModel):
             }
         return out
 
+    def bypass_summary(self) -> dict[str, Any]:
+        """The oracle replay's counts, over the items that sent at least one spec.
+
+        A bypass is a trap the golden question fires and the sent spec did not
+        (`harness.replay`). `material` leaves out the ones that only lost a
+        sentence: a refusal, an ask or a swap that never happened. Empty when
+        no item queried, and on every deterministic report.
+        """
+        replayed = [i for i in self.items if i.queries]
+        if not replayed or self.mode == "deterministic":
+            return {}
+        hit = [i for i in replayed if i.bypasses]
+        names: dict[str, list[str]] = {}
+        for i in hit:
+            key = i.id if self.repeat == 1 else f"{i.id}#{i.run}"
+            names[key] = [str(b) for b in i.bypasses]
+        material = [any(b.material for b in i.bypasses) for i in replayed]
+
+        # The off/on measures for spec-keyed disclosures. A silent wrong reading
+        # is counted over the items whose question was ambiguous; relay over the
+        # disclosures the server actually returned; extra queries over the
+        # items that queried, as calls beyond one per user turn.
+        ambiguous = [i for i in replayed if i.ambiguous]
+        silent = {
+            (i.id if self.repeat == 1 else f"{i.id}#{i.run}"): i.silent_wrong
+            for i in ambiguous
+            if i.silent_wrong
+        }
+        returned = sum(i.spec_keyed_returned for i in replayed)
+        relayed = sum(i.spec_keyed_relayed for i in replayed)
+        extra = sum(max(0, i.queries - i.turns) for i in replayed)
+        return {
+            "bypass_n": len(replayed),
+            "bypass_items": len(hit),
+            "bypass_rate": _rate([bool(i.bypasses) for i in replayed]),
+            "material_bypass_items": sum(material),
+            "material_bypass_rate": _rate(material),
+            "bypasses": names,
+            "silent_wrong_n": len(ambiguous),
+            "silent_wrong_items": len(silent),
+            "silent_wrong_rate": _rate([bool(i.silent_wrong) for i in ambiguous]),
+            "silent_wrong": silent,
+            "spec_keyed": sum(i.spec_keyed for i in replayed),
+            "spec_keyed_returned": returned,
+            "spec_keyed_relayed": relayed,
+            "spec_keyed_relay_rate": round(relayed / returned, 4) if returned else None,
+            "avg_queries": round(sum(i.queries for i in replayed) / len(replayed), 2),
+            "extra_queries": extra,
+            "avg_extra_queries": round(extra / len(replayed), 2),
+        }
+
     def usage_summary(self) -> dict[str, Any]:
         """Token and cost totals, plus per item averages over the items that ran.
 
@@ -298,6 +390,28 @@ class EvalReport(BaseModel):
             )
         if "stopped" in s:
             head += f"{s['stopped']}: {', '.join(s['skipped'])}\n\n"
+        if "bypass_n" in s:
+            head += (
+                f"oracle replay: {s['bypass_items']}/{s['bypass_n']} items bypassed a trap"
+                f" ({_pct(s['bypass_rate'])}), {s['material_bypass_items']} materially"
+                f" ({_pct(s['material_bypass_rate'])})\n\n"
+            )
+            for item_id, traps in s["bypasses"].items():
+                head += f"- {item_id}: {', '.join(traps)}\n"
+            if s["bypasses"]:
+                head += "\n"
+            head += (
+                f"silent wrong readings: {s['silent_wrong_items']}/{s['silent_wrong_n']}"
+                f" ambiguous items ({_pct(s['silent_wrong_rate'])})"
+                f" | spec-keyed disclosures: {s['spec_keyed']} apply,"
+                f" {s['spec_keyed_returned']} returned, {s['spec_keyed_relayed']} relayed"
+                f" ({_pct(s['spec_keyed_relay_rate'])})"
+                f" | queries {s['avg_queries']} per item, {s['avg_extra_queries']} extra\n\n"
+            )
+            for item_id, readings in s["silent_wrong"].items():
+                head += f"- silent: {item_id}: {', '.join(readings)}\n"
+            if s["silent_wrong"]:
+                head += "\n"
         if "by_item" in s:
             head += "| item | passed | first-turn | why not |\n|---|---|---|---|\n"
             for item_id, k in s["by_item"].items():
@@ -351,6 +465,36 @@ def compare(reports: list[EvalReport]) -> str:
             f"| {_pct(s['first_turn_answer_rate'])} | {_pct(s['over_refusal_rate'])} "
             f"| {_pct(s['disclosure_rate'])} | {_pct(s['capture_rate'])} "
             f"| {_cents(s.get('avg_cost_usd'))} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def compare_replay(reports: list[EvalReport]) -> str:
+    """One markdown table of the oracle replay's measures across runs of the same set.
+
+    This is the table the spec-keyed disclosure is judged on: the same items
+    with the switch off and on (`+spec` in the mode column). Rows are in the
+    order given. A run that sent no specs has no row.
+    """
+    lines = [
+        "| model | mode | bypass | material | silent wrong | spec-keyed returned | relayed "
+        "| first-turn | queries/item | extra/item | out tokens/item | cents/item |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in reports:
+        s = r.summary()
+        if "bypass_n" not in s:
+            continue
+        lines.append(
+            f"| {r.model} | {r.label} "
+            f"| {s['bypass_items']}/{s['bypass_n']} "
+            f"| {s['material_bypass_items']}/{s['bypass_n']} "
+            f"| {s['silent_wrong_items']}/{s['silent_wrong_n']} "
+            f"| {s['spec_keyed_returned']}/{s['spec_keyed']} "
+            f"| {_pct(s['spec_keyed_relay_rate'])} "
+            f"| {_pct(s['first_turn_answer_rate'])} "
+            f"| {s['avg_queries']} | {s['avg_extra_queries']} "
+            f"| {s.get('avg_output_tokens', '-')} | {_cents(s.get('avg_cost_usd'))} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -478,7 +622,9 @@ def run_evals(
         enforce_check = not byo
     runs = [(item, n) for n in range(1, repeat + 1) for item in items]
     if isinstance(model, str):
-        check_budget(len(runs), api_key=api_key, per_item=budget_per_item, force=force, echo=echo)
+        # A multi-turn item costs about one item per user turn.
+        turns = sum(1 + len(item.earlier) for item, _ in runs)
+        check_budget(turns, api_key=api_key, per_item=budget_per_item, force=force, echo=echo)
 
     started = datetime.now(UTC)
     name = model_id(model)
@@ -522,6 +668,7 @@ def run_evals(
         prompt=prompt,
         enforce_check=enforce_check,
         repeat=repeat,
+        spec_disclosures=service.tenant.checks.spec_disclosures,
         started_at=started,
         finished_at=datetime.now(UTC),
         items=scores,
@@ -570,9 +717,41 @@ def _score_agent_item(
     exp = item.expected
     key = f"eval:{item.id}:{run}"
     variant = {"byo": byo, "prompt": prompt, "enforce_check": enforce_check}
-    first = run_question(
-        service, item.question, model=model, api_key=api_key, session_key=key, **variant
-    )
+
+    # A multi-turn item's earlier turns run in the same conversation and session
+    # and are not scored; `first` is the turn the expectations describe.
+    setup: list[Turn] = []
+    history: list[Any] | None = None
+    for text in item.earlier:
+        turn = run_question(
+            service,
+            text,
+            model=model,
+            api_key=api_key,
+            session_key=key,
+            message_history=history,
+            **variant,
+        )
+        setup.append(turn)
+        if turn.error:
+            break
+        history = turn.messages
+    if setup and setup[-1].error:
+        first = Turn(
+            question=item.question,
+            error=f"earlier turn {len(setup)} failed: {setup[-1].error}",
+            error_status=setup[-1].error_status,
+        )
+    else:
+        first = run_question(
+            service,
+            item.question,
+            model=model,
+            api_key=api_key,
+            session_key=key,
+            message_history=history,
+            **variant,
+        )
 
     asked = [c.trap for c in first.clarifications]
     final = first
@@ -587,11 +766,48 @@ def _score_agent_item(
             **variant,
         )
 
+    # Each turn replays against everything the user had said by then. The
+    # clarification reply is the eval's own wording, not the user's, so it
+    # replays against the same text as the turn it answers.
+    conversation = [(item.said(n), turn) for n, turn in enumerate(setup, start=1)]
+    conversation.append((item.said(), first))
+    if final is not first:
+        conversation.append((item.said(), final))
+
+    replay = replay_conversation(
+        [(oracle, _sent_queries(t)) for oracle, t in conversation],
+        service.registry,
+        service.catalog,
+        max_clarifications=service.tenant.limits.max_clarifications,
+    )
+    replies = [t.answer for _, t in conversation]
+    returned = [
+        k for k in replay.spec_keyed if k.text in conversation[k.turn - 1][1].required_disclosures
+    ]
+
     score = ItemScore(
         id=item.id,
         question=item.question,
         kind=item.kind,
         run=run,
+        turns=len(conversation),
+        queries=sum(len(_sent_queries(t)) for _, t in conversation),
+        bypasses=replay.bypasses,
+        ambiguous=replay.ambiguous,
+        silent_wrong=[
+            str(r)
+            for r in replay.wrong
+            if _reports(replies[r.turn - 1], r.numbers)
+            and not _mentions(replies[r.turn - 1], r.names)
+        ],
+        spec_keyed=len(replay.spec_keyed),
+        spec_keyed_returned=len(returned),
+        spec_keyed_relayed=sum(
+            1
+            for k in returned
+            if _mentions(replies[k.turn - 1], k.names)
+            and _mentions(replies[k.turn - 1], k.default_names)
+        ),
         expected_status=exp.status,
         observed_status=_observed(first, final),
         tool_calls=[c.name for c in final.tool_calls],
@@ -602,7 +818,7 @@ def _score_agent_item(
         ),
         answer_text=final.answer,
         log_answer_status=final.log_answer.status if final.log_answer else None,
-        usage=_merge_usage(first, final),
+        usage=_merge_usage([t for _, t in conversation]),
         elapsed_ms=int((time.monotonic() - t0) * 1000),
         error=final.error or first.error,
         error_status=final.error_status or first.error_status,
@@ -783,10 +999,38 @@ def _answer_prompt(answers: dict[str, str]) -> str:
     )
 
 
-def _merge_usage(first: Turn, final: Turn) -> dict[str, float]:
-    out = dict(first.usage)
-    if final is not first:
-        for k, v in final.usage.items():
+def _sent_queries(turn: Turn) -> list[SentQuery]:
+    """Every query_metrics call of the turn, in order: the spec sent and the numbers back."""
+    return [
+        SentQuery(spec=c.spec, numbers=c.numbers)
+        for c in turn.tool_calls
+        if c.name == "query_metrics" and c.spec is not None
+    ]
+
+
+def _reports(reply: str, numbers: list[float]) -> bool:
+    """Does the reply give any of a query's numbers? Narration about the check is ignored.
+
+    Whole numbers under 13 are left out: a reply says "3 countries" or "the
+    first 2 months" without reporting a result.
+    """
+    kept, _ = strip_narration(reply)
+    found = extract_numbers(kept)
+    figures = [v for v in numbers if abs(v) >= 13 or not float(v).is_integer()]
+    return any(not numbers_missing([v], found) for v in figures)
+
+
+def _mentions(reply: str, names: list[str]) -> bool:
+    """Does the reply use any of these names or labels?"""
+    text = _norm_text(reply)
+    return any(_norm_text(n) in text for n in names if n)
+
+
+def _merge_usage(turns: list[Turn]) -> dict[str, float]:
+    """Usage summed over every turn of an item, earlier turns included."""
+    out: dict[str, float] = {}
+    for turn in turns:
+        for k, v in turn.usage.items():
             out[k] = out.get(k, 0) + v
     return out
 
@@ -839,6 +1083,7 @@ __all__ = [
     "ItemScore",
     "check_budget",
     "compare",
+    "compare_replay",
     "key_status",
     "numbers_missing",
     "run_evals",

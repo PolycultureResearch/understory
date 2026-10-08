@@ -1036,6 +1036,7 @@ def test_lean_prompt_is_the_connector_instructions_plus_two_lines(alpenglow_db):
     assert "The spec fields" in (script.descriptions["query_metrics"] or "")
 
 
+@pytest.mark.fake_db
 def test_unknown_prompt_is_refused(alpenglow):
     from understory.harness.agent import build_agent
     from understory.server.session import SessionStore
