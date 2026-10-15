@@ -149,6 +149,24 @@ def test_read_only_rejects_writes(wh):
         wh.run("create table main_marts.scratch as select 1", timeout_s=10, row_cap=10)
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "select * from read_csv('/etc/hosts')",
+        "select * from '/etc/hosts'",
+        "attach '/tmp/understory-probe.db' as probe",
+        "copy (select 1) to '/tmp/understory-probe.csv'",
+        "set enable_external_access = true",
+        "load httpfs",
+    ],
+)
+def test_the_connection_refuses_files_network_and_settings(wh, sql):
+    """What holds when the guard's deny list falls behind DuckDB."""
+    with pytest.raises(QueryError):
+        wh.run(sql, timeout_s=10, row_cap=10)
+    assert wh.run("select count(*) from main_marts.fct_orders", timeout_s=5, row_cap=1).rows
+
+
 def test_timeout_raises_query_error(wh):
     slow = "select count(*) from range(1000000000) a, range(1000000000) b"
     with pytest.raises(QueryError, match="timeout"):

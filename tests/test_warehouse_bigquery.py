@@ -65,7 +65,7 @@ def test_job_config_and_query_call(config):
     assert jc.use_legacy_sql is False
     # The client keeps this as a string in its API representation.
     assert int(jc.job_timeout_ms) == 30_000
-    assert jc.maximum_bytes_billed is None
+    assert int(jc.maximum_bytes_billed) == 10 * 1024**3, "capped by default"
 
     job.result.assert_called_once_with(timeout=30, max_results=11)
 
@@ -76,15 +76,27 @@ def test_job_config_and_query_call(config):
     assert res.truncated is False
 
 
-def test_maximum_bytes_billed_read_from_config_when_present():
-    cfg = BigQueryConfig(project="proj")
-    # tenant.py does not declare the field yet; the adapter reads it via getattr.
-    object.__setattr__(cfg, "maximum_bytes_billed", 10_000_000)
-    client, _ = _client_returning([], [])
-    wh = BigQueryWarehouse(cfg, client=client)
-    wh.run("select 1", timeout_s=5, row_cap=1)
-    jc = client.query.call_args.kwargs["job_config"]
-    assert jc.maximum_bytes_billed == 10_000_000
+def test_maximum_bytes_billed_comes_from_the_tenant():
+    for cap, sent in ((10_000_000, 10_000_000), (None, None)):
+        client, _ = _client_returning([], [])
+        wh = BigQueryWarehouse(
+            BigQueryConfig(project="proj", maximum_bytes_billed=cap), client=client
+        )
+        wh.run("select 1", timeout_s=5, row_cap=1)
+        jc = client.query.call_args.kwargs["job_config"]
+        assert (jc.maximum_bytes_billed and int(jc.maximum_bytes_billed)) == sent
+
+
+def test_a_job_over_the_cap_says_so(config):
+    from google.api_core import exceptions as gexc
+
+    client = MagicMock()
+    client.query.side_effect = gexc.BadRequest(
+        "Query exceeded limit for bytes billed: 10737418240. 21474836480 or higher required."
+    )
+    wh = BigQueryWarehouse(config, client=client)
+    with pytest.raises(QueryError, match=r"more than 10 GiB, this tenant's cap\. Narrow"):
+        wh.run("select * from `proj.marts.fct_events`", timeout_s=2, row_cap=10)
 
 
 def test_truncation_when_more_than_row_cap_rows(config):

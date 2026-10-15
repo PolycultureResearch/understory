@@ -171,3 +171,23 @@ def test_telemetry_written(service):
     events = list(Path(cfg.events_prefix).rglob("*.parquet"))
     text = list(Path(cfg.text_prefix).rglob("*.parquet"))
     assert events and text
+
+
+def test_run_sql_cannot_read_the_tenants_personal_data(service, session):
+    """The grill's probe: email ran. The fixture now denies it, and says so up front."""
+    assert "dim_customers.email" in service.get_context(session)
+    r = service.run_sql(
+        session,
+        "select email from main_marts.dim_customers",
+        question="Who are our customers?",
+        reason="probe",
+    )
+    assert r.status == Status.sql_rejected
+    assert "email" in r.refusal.message
+    ok = service.run_sql(
+        session,
+        "select country, count(*) as n from main_marts.dim_customers group by 1",
+        question="How many customers per country?",
+        reason="no customer count by country",
+    )
+    assert ok.status == Status.resolved, ok

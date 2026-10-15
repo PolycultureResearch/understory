@@ -54,6 +54,9 @@ class BigQueryConfig(BaseModel):
     location: str = "US"
     credentials_file: str | None = None
     """Service account JSON. Omitted means application default credentials."""
+    maximum_bytes_billed: int | None = 10 * 1024**3
+    """Every job, governed or ad hoc, fails rather than bill past this. 10 GiB by
+    default, about six cents on demand. None removes the cap."""
 
 
 class MetricFlowLocalConfig(BaseModel):
@@ -110,6 +113,11 @@ class SqlScope(BaseModel):
     schemas: list[str] = Field(default_factory=list)
     """Empty means every schema the catalog references."""
     deny_relations: list[str] = Field(default_factory=list)
+    """Relations run_sql may not read, matched on trailing dotted parts."""
+    deny_columns: list[str] = Field(default_factory=list)
+    """`relation.column` entries run_sql may not read, e.g. `dim_customers.email`.
+    For personal data in a table whose other columns answer real questions. The
+    warehouse grant is the control; this is the refusal the chatbot can relay."""
     include_sql_in_governed_provenance: bool = True
 
 

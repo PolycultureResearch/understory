@@ -118,6 +118,9 @@ def sql_section(tenant: TenantConfig, catalog: Catalog) -> str:
             "run_sql may read every schema the semantic layer references, and "
             "information_schema. Results are ungoverned and must be labeled as such."
         )
+    denied = [*tenant.sql.deny_relations, *tenant.sql.deny_columns]
+    if denied:
+        lines.append(f"run_sql may not read {', '.join(denied)}.")
     lines.append("Tables the semantic layer is built on:")
     for rel in relations:
         note = "" if not schemas or _schema_of(rel) in schemas else " (metrics only, outside scope)"

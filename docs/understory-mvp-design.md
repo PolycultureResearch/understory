@@ -125,7 +125,8 @@ The semantic layer will be young at every new client. SQL will carry a lot of ea
 - Takes `sql`, the user's `question`, and a one-line `reason` the governed path could not answer it ("no promo_code dimension on orders"). All three are required. The model knows the reason at the moment it falls back and it costs nothing to ask.
 - Read-only. The guard parses with sqlglot and rejects anything other than a single SELECT.
 - Row cap and statement timeout from tenant config.
-- Schema scope from tenant config. Only the mart and semantic schemas, never raw or staging by default.
+- Schema scope from tenant config. Only the mart and semantic schemas, never raw or staging by default. Within scope, `deny_relations` and `deny_columns` take out tables and columns (personal data) the data owner names; `get_context` lists them.
+- A cost cap on BigQuery (`maximum_bytes_billed`, 10 GiB by default) on every job. DuckDB connections open with external access off and the configuration locked.
 - Response carries `governed: false`, the SQL that ran, the tables it touched, and a required disclosure of the shape "answered with ad hoc SQL because <reason>; not a governed metric". The reason reaches the user through the same mechanism as every other disclosure.
 - Every call writes a gap record (section 8.3) with the question, the reason, the SQL, and the tables touched.
 

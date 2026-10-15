@@ -151,6 +151,65 @@ def test_deny_relations():
     assert not r2.ok
 
 
+DENY_PII = SqlScope(
+    schemas=["main_marts"], deny_columns=["dim_customers.email", "dim_customers.full_name"]
+)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "select email from main_marts.dim_customers",
+        "select c.full_name, o.total_amount from main_marts.fct_orders o "
+        "join main_marts.dim_customers c using (customer_id)",
+        "select * from main_marts.dim_customers",
+        "select c.* from main_marts.dim_customers c",
+        "select * exclude (email) from main_marts.dim_customers",
+        "select c from main_marts.dim_customers c",
+        "select to_json(dim_customers) from main_marts.dim_customers",
+        "select country from main_marts.dim_customers where email like '%@example.com'",
+        "with x as (select * from main_marts.dim_customers) select country from x",
+        "select columns('e.*') from main_marts.dim_customers",
+    ],
+)
+def test_deny_columns_refuses_every_way_to_read_them(sql):
+    r = guard(sql, DENY_PII)
+    assert not r.ok, sql
+    assert r.reason
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "select country, count(*) from main_marts.dim_customers group by 1",
+        "select cohort_month, count(distinct customer_id) from main_marts.dim_customers group by 1",
+        "select * from main_marts.fct_orders",
+    ],
+)
+def test_deny_columns_leaves_the_rest_of_the_table(sql):
+    r = guard(sql, DENY_PII)
+    assert r.ok, r.reason
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "select * from duckdb_tables()",
+        "select * from duckdb_settings()",
+        "select * from pragma_database_list()",
+        "select current_setting('enable_external_access')",
+    ],
+)
+def test_rejects_engine_introspection(sql):
+    assert not guard(sql).ok, sql
+
+
+def test_catalog_part_must_be_the_catalogs():
+    assert guard('select count(*) from "alpenglow"."main_marts"."fct_orders"').ok
+    r = guard('select count(*) from "other"."main_marts"."fct_orders"')
+    assert not r.ok and "'other'" in r.reason
+
+
 def test_disabled_scope_refuses():
     r = guard("select 1", scope=SqlScope(enabled=False))
     assert not r.ok

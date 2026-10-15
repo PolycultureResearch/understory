@@ -59,6 +59,7 @@ semantic_layer:
 
 sql:
   schemas: [marts]
+  deny_columns: [dim_attendees.email, dim_attendees.phone]   # personal data; see below
 
 log:
   events_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/northern_nights/events"
@@ -72,6 +73,18 @@ auth:
 ```
 
 The full schema, with defaults, is `TenantConfig` in `src/understory/tenant.py`.
+
+### What `run_sql` may read
+
+`sql.schemas` is the whole of every schema it names, not just the relations behind metrics, so go through the marts before the first deploy:
+
+- A table no one should query ad hoc goes in `deny_relations`.
+- Personal data in a table whose other columns are useful (customer country, signup channel, cohort) goes in `deny_columns` as `table.column`. The guard then refuses the column by name, `select *` on that table, and the table alias used as a value, which in DuckDB returns the whole row.
+- These are refusals the chatbot can explain. The control is the service account's grant: on BigQuery, column-level access policies or an authorized view without those columns.
+
+On BigQuery every job, governed or ad hoc, carries `warehouse.maximum_bytes_billed`, 10 GiB unless set; `null` removes it. A query over the cap is refused before it runs and the chatbot is told to narrow it.
+
+A DuckDB connection opens with external access off and its configuration locked, so no file, network or extension read works through it whatever the guard misses.
 
 ## Running against it
 

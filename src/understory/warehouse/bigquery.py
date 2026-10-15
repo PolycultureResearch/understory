@@ -13,9 +13,10 @@ raises `QueryError`. The client-side bound is what the unit tests exercise.
 
 Cost control
 ------------
-`maximum_bytes_billed` is read from the tenant config with `getattr` and a
-None default, because `BigQueryConfig` does not declare it yet. Add the field
-to `tenant.py` and it takes effect with no change here.
+Every job carries `maximum_bytes_billed` from the tenant config, 10 GiB unless
+the tenant says otherwise. BigQuery refuses a job that would bill more before
+it runs, and the adapter turns that into a `QueryError` naming the cap, so the
+chatbot can narrow the query rather than relay a quota error.
 
 Relations
 ---------
@@ -35,6 +36,10 @@ from understory.protocols import QueryError
 from understory.tenant import BigQueryConfig
 from understory.types import Column, Result
 from understory.warehouse._values import DAILY_COUNTS_CAP, as_date, json_safe_row
+
+
+def _gib(n: int) -> str:
+    return f"{n / 1024**3:g} GiB"
 
 
 def bq_relation(relation: str) -> str:
@@ -73,7 +78,7 @@ class BigQueryWarehouse:
         self.config = config
         self.schemas = [s.lower() for s in (schemas or [])]
         self.timeout_s = timeout_s
-        self.maximum_bytes_billed: int | None = getattr(config, "maximum_bytes_billed", None)
+        self.maximum_bytes_billed = config.maximum_bytes_billed
         self._client = client if client is not None else self._make_client(config)
 
     def _make_client(self, config: BigQueryConfig) -> Any:
@@ -201,7 +206,13 @@ class BigQueryWarehouse:
             self._cancel(job)
             raise QueryError(f"query exceeded the {timeout_s}s timeout") from e
         except gexc.GoogleAPICallError as e:
-            raise QueryError(e.message or str(e)) from e
+            message = e.message or str(e)
+            if "bytes billed" in message.lower() and self.maximum_bytes_billed is not None:
+                raise QueryError(
+                    f"query would scan more than {_gib(self.maximum_bytes_billed)}, this "
+                    "tenant's cap. Narrow the time window or select fewer columns."
+                ) from e
+            raise QueryError(message) from e
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         columns = [Column(name=f.name, type=str(f.field_type)) for f in schema]
         truncated = len(raw) > row_cap

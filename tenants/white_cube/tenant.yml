@@ -22,6 +22,9 @@ limits:
 sql:
   enabled: true
   schemas: [main_marts]
+  # Personal data. Every other column of dim_users answers real questions
+  # (country, channel, cohort), so the columns are denied and not the table.
+  deny_columns: [dim_users.email, dim_users.full_name]
 
 log:
   events_prefix: "${UNDERSTORY_LOG_DIR:-.understory-log}/white_cube/events"
