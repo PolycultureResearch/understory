@@ -21,10 +21,18 @@ Rules, in order of checking:
    `scope.schemas`, or when that is empty, the schemas of `catalog_relations`.
    When both are empty there is no schema restriction and unqualified names
    are allowed.
+   A catalog part (the DuckDB database, the BigQuery project) must be one the
+   semantic catalog's relations use, when they name one.
 6. Relations in `scope.deny_relations` are refused. Entries match on the
    trailing dotted parts, so `main_marts.fct_orders` denies
    `alpenglow.main_marts.fct_orders` too.
-7. A LIMIT of `row_cap` is added when the statement has none.
+7. Columns in `scope.deny_columns` are refused when the statement reads their
+   relation: by name anywhere in the statement, through `*` or `t.*`, or
+   through the table alias used as a value (DuckDB returns the whole row as a
+   struct for `SELECT c FROM dim_customers c`). The check is by column name,
+   not resolved per table, so it refuses a same-named column of another table
+   in that statement too. That is the safe side of a check that has no schema.
+8. A LIMIT of `row_cap` is added when the statement has none.
 
 The returned `sql` is the statement re-rendered in the target dialect.
 """
@@ -64,6 +72,8 @@ DENIED_FUNCTIONS = frozenset(
         "iceberg_metadata",
         "iceberg_snapshots",
         "shred_json",
+        "columns",
+        "current_setting",
     }
 )
 
@@ -80,6 +90,8 @@ DENIED_FUNCTION_PREFIXES = (
     "azure_",
     "s3_",
     "gcs_",
+    "duckdb_",
+    "pragma_",
 )
 
 # A "table" whose name looks like a file path or URL. DuckDB lets you write
@@ -137,7 +149,11 @@ def guard_sql(
         return _refuse(f"function {denied_fn}() is not allowed in run_sql")
 
     allowed_schemas = _allowed_schemas(scope, catalog_relations)
+    allowed_catalogs = _allowed_catalogs(catalog_relations)
     deny = [_parts(r) for r in scope.deny_relations]
+    deny_cols = [(p[:-1], p[-1]) for p in map(_parts, scope.deny_columns) if len(p) >= 2]
+    guarded: list[tuple[str, list[str]]] = []
+    """(column, [table name, alias]) for each denied column whose relation is read."""
     cte_names = {c.alias.lower() for c in stmt.find_all(exp.CTE) if c.alias}
 
     relations: list[str] = []
@@ -167,13 +183,25 @@ def guard_sql(
                     f"schema {schema!r} is outside the run_sql scope "
                     f"({', '.join(sorted(allowed_schemas))})"
                 )
+        if catalog and allowed_catalogs and catalog.lower() not in allowed_catalogs:
+            return _refuse(
+                f"{catalog!r} is outside the run_sql scope ({', '.join(sorted(allowed_catalogs))})"
+            )
         parts = [p for p in (catalog, schema, name) if p]
         if any(_suffix_match(parts, d) for d in deny):
             return _refuse(f"relation {'.'.join(parts)} is not available to run_sql")
+        for rel, col in deny_cols:
+            if _suffix_match(parts, rel):
+                guarded.append((col, [n.lower() for n in (name, table.alias) if n]))
         dotted = ".".join(parts)
         if dotted.lower() not in seen:
             seen.add(dotted.lower())
             relations.append(dotted)
+
+    if guarded:
+        problem = _denied_column(stmt, guarded)
+        if problem:
+            return _refuse(problem)
 
     if stmt.args.get("limit") is None:
         stmt = stmt.limit(row_cap)
@@ -224,6 +252,29 @@ def _suffix_match(parts: list[str], deny: list[str]) -> bool:
     if not deny or len(deny) > len(parts):
         return False
     return [p.lower() for p in parts[-len(deny) :]] == deny
+
+
+def _denied_column(stmt: exp.Expression, guarded: list[tuple[str, list[str]]]) -> str | None:
+    """Why the statement reads a denied column, or None."""
+    columns = {col for col, _ in guarded}
+    names = {n for _, ns in guarded for n in ns}
+    shown = ", ".join(sorted(columns))
+    for star in stmt.find_all(exp.Star):
+        if isinstance(star.parent, exp.Count):
+            continue
+        return f"select * is not allowed on a table with restricted columns ({shown}); name them"
+    for column in stmt.find_all(exp.Column):
+        name = column.name.lower()
+        if name in columns:
+            return f"column {name} is not available to run_sql"
+        if not column.table and name in names:
+            return f"{name} as a value returns the whole row, including {shown}; name the columns"
+    return None
+
+
+def _allowed_catalogs(catalog_relations: list[str]) -> set[str]:
+    """Catalogs the semantic catalog's relations name. Empty means no check."""
+    return {p[-3] for p in map(_parts, catalog_relations) if len(p) >= 3}
 
 
 def _allowed_schemas(scope: SqlScope, catalog_relations: list[str]) -> set[str] | None:

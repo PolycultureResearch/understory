@@ -15,6 +15,15 @@ translated to `QueryError`. The timer covers both execution and the fetch of
 `row_cap + 1` rows. If the timer fires after the query finished the interrupt
 lands on a cursor that is about to be closed, so it has no effect.
 
+Lockdown
+--------
+The connection opens with external access off and the configuration locked.
+DuckDB then refuses every file and network read (`read_csv`, `ATTACH`, `COPY`,
+extension loads) and every `SET` that would turn it back on. The guard's
+function deny list refuses those early with a better message; this is what
+holds when the list falls behind DuckDB. The database file itself is opened
+before the lock applies.
+
 Relations
 ---------
 Relation strings are interpolated into SQL as given. Anything DuckDB accepts
@@ -39,6 +48,14 @@ from understory.types import Column, Result
 from understory.warehouse._values import DAILY_COUNTS_CAP, as_date, json_safe_row
 
 SYSTEM_SCHEMAS = frozenset({"information_schema", "pg_catalog"})
+
+LOCKDOWN = {
+    "enable_external_access": False,
+    "autoload_known_extensions": False,
+    "autoinstall_known_extensions": False,
+    "lock_configuration": True,
+}
+"""Connection settings. `lock_configuration` goes last: it freezes the others."""
 
 
 def quote_ident(name: str) -> str:
@@ -69,7 +86,7 @@ class DuckDBWarehouse:
         self.schemas = [s.lower() for s in (schemas or [])]
         self.timeout_s = timeout_s
         try:
-            self._conn = duckdb.connect(config.path, read_only=config.read_only)
+            self._conn = duckdb.connect(config.path, read_only=config.read_only, config=LOCKDOWN)
         except duckdb.Error as e:
             raise QueryError(f"could not open DuckDB database {config.path}: {e}") from e
         self._lock = threading.Lock()
