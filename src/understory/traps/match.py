@@ -43,8 +43,8 @@ spec's time is left untouched and a disclosure names the window; the server
 translates the window id into dates. A window is never asked for.
 
 Spec-keyed disclosures (`spec_disclosures`, off by default): everything above
-reads the trap phrase from `spec.question`, which the chatbot writes. When it
-leaves the question out, tidies "revenue" into "gross revenue", or sends only a
+reads the trap phrase from `spec.question` and `spec.earlier`, which the chatbot
+writes. When it leaves them out, tidies "revenue" into "gross revenue", or sends only a
 follow-up, no phrase fires and the matcher cannot tell that from a user who
 asked for gross revenue by name. With the switch on, a trap whose phrase did
 not fire still looks at the spec: a candidate that is not the preferred one
@@ -93,7 +93,8 @@ def check(
     names when the trap's phrase did not fire. See the module docstring.
     """
     spec = spec.model_copy(deep=True)
-    question = normalize(spec.question) if spec.question else ""
+    # The earlier turns count too: a follow-up rarely repeats the trap word.
+    question = normalize(spec.said())
     fired: list[str] = []
     clarifications: list[Clarification] = []
     disclosures: list[Disclosure] = []

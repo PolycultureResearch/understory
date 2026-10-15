@@ -17,7 +17,7 @@ from datetime import date
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # --------------------------------------------------------------------------- #
 # Catalog: what the semantic layer exposes
@@ -109,19 +109,53 @@ class ClarificationChoice(BaseModel):
     """Option id the user picked."""
 
 
+def _require_question(schema: dict[str, Any]) -> None:
+    """Mark `question` required in the schema a chatbot reads."""
+    required = schema.setdefault("required", [])
+    if "question" not in required:
+        required.append("question")
+
+
 class MetricSpec(BaseModel):
     metrics: list[str]
     group_by: list[str] = Field(default_factory=list)
     where: list[WhereClause] = Field(default_factory=list)
     time: TimeSpec = Field(default_factory=TimeSpec)
-    question: str | None = None
-    """The user's question, for the traps matcher and the log. Optional."""
+    question: str | None = Field(
+        default=None,
+        description=(
+            "The user's latest message, in their own words, not a summary. Required: "
+            "the server checks these words for terms the company has flagged as ambiguous."
+        ),
+    )
+    """The user's question, for the traps matcher and the log.
+
+    Optional in Python, where the semantic layer and the tests build specs with
+    no user behind them. Required on the wire: the published schema says so and
+    `Service.query_metrics` refuses a spec without it.
+    """
+    earlier: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The user's earlier messages that the latest one builds on, in their own "
+            "words, oldest first. A follow-up such as 'split that by country' needs the "
+            "message that said what 'that' is. Empty for a first question or a new subject."
+        ),
+    )
+    """Earlier user turns the question depends on. The traps matcher reads them
+    with the question, so a trap word said two turns ago still fires."""
     clarifications: list[ClarificationChoice] = Field(default_factory=list)
     limit: int | None = None
 
+    model_config = ConfigDict(json_schema_extra=_require_question)
+
+    def said(self) -> str:
+        """Everything of the user's the spec carries: the earlier turns, then the question."""
+        return " ".join(t for t in [*self.earlier, self.question or ""] if t.strip())
+
     def hash(self) -> str:
-        """Stable hash of the parts that affect SQL. Question and clarifications excluded."""
-        payload = self.model_dump(mode="json", exclude={"question", "clarifications"})
+        """Stable hash of the parts that affect SQL: not the user's words or clarifications."""
+        payload = self.model_dump(mode="json", exclude={"question", "earlier", "clarifications"})
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
@@ -258,10 +292,15 @@ class NumberCheck(BaseModel):
     sourced: bool
     result_id: str | None = None
     column: str | None = None
+    derived: str | None = None
+    """How the number follows from sourced ones when no result holds it, e.g.
+    "percent change". Set only when `sourced` is true and `result_id` is None."""
 
 
 class AnswerReview(BaseModel):
-    status: Literal["pass", "unsourced_numbers", "no_results_in_session"]
+    status: Literal["pass", "unsourced_numbers", "missing_disclosures", "no_results_in_session"]
+    """`unsourced_numbers` wins when a draft has both problems; the missing
+    disclosures are listed either way."""
     checked: list[NumberCheck] = Field(default_factory=list)
     unsourced: list[NumberCheck] = Field(default_factory=list)
     disclosures_present: list[str] = Field(default_factory=list)

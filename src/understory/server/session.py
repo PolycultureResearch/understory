@@ -2,8 +2,20 @@
 
 The store is in memory only. It remembers the results each session has seen so
 `log_answer` can check that every number in a draft traces to one of them, and
-the disclosures the session owes. Nothing here is persisted; the telemetry
+the disclosures each result came with. Nothing here is persisted; the telemetry
 writer already logged the events. Sessions expire after inactivity.
+
+A number is sourced when a result holds it, or when it is plain arithmetic
+over numbers the draft itself sources: a difference, a sum, a ratio, a percent
+change, a column total or a share of one. "January was 980,000, February
+933,576, down 4.7%" passes. The operands have to be in the draft, so the
+reader can redo the sum and a stray number cannot hide behind some pair of
+cells in a large result.
+
+A draft owes the disclosures of the results it quotes, and no others. The
+server cannot see where one question ends and the next begins, but it can see
+which results a draft's numbers came from. A draft that quotes none owes the
+disclosures of the results no passing draft has covered yet.
 """
 
 from __future__ import annotations
@@ -13,7 +25,9 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from itertools import combinations
 
 from understory.types import AnswerReview, NumberCheck, Result
 
@@ -54,6 +68,10 @@ class StoredResult:
     metrics: list[str] = field(default_factory=list)
     numeric_values: list[tuple[str, float]] = field(default_factory=list)
     """(column, value) for every numeric cell, flattened, for the check."""
+    disclosures: list[str] = field(default_factory=list)
+    """What an answer quoting this result has to say."""
+    reviewed: bool = False
+    """A draft has passed since this result came back."""
 
 
 @dataclass
@@ -61,14 +79,21 @@ class Session:
     key: str
     user_hash: str | None = None
     results: dict[str, StoredResult] = field(default_factory=dict)
-    disclosures: list[str] = field(default_factory=list)
     last_seen: float = field(default_factory=time.monotonic)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
+    """Tool calls run on worker threads and a chatbot may send two at once."""
 
     def touch(self) -> None:
         self.last_seen = time.monotonic()
 
-    def remember(self, tool: str, result: Result, metrics: list[str] | None = None) -> str:
+    def remember(
+        self,
+        tool: str,
+        result: Result,
+        metrics: list[str] | None = None,
+        disclosures: list[str] | None = None,
+    ) -> str:
         result_id = f"r_{uuid.uuid4().hex[:10]}"
         values: list[tuple[str, float]] = []
         for row in result.rows:
@@ -77,14 +102,12 @@ class Session:
                     continue
                 if isinstance(cell, int | float) and math.isfinite(cell):
                     values.append((col.name, float(cell)))
-        self.results[result_id] = StoredResult(result_id, tool, result, metrics or [], values)
+        with self.lock:
+            self.results[result_id] = StoredResult(
+                result_id, tool, result, metrics or [], values, list(disclosures or [])
+            )
         self.touch()
         return result_id
-
-    def owe(self, disclosures: list[str]) -> None:
-        for d in disclosures:
-            if d not in self.disclosures:
-                self.disclosures.append(d)
 
 
 class SessionStore:
@@ -192,36 +215,110 @@ def _matches(shown: float, actual: float, literal: str) -> bool:
     return False
 
 
+_OPERANDS_KEPT = 60
+"""How many sourced numbers of a draft the arithmetic check combines."""
+
+
+def _derivations(
+    operands: list[float], columns: list[tuple[str, list[float]]]
+) -> Iterator[tuple[str, float]]:
+    """Every (name, value) the draft could have worked out from what it sources.
+
+    `operands` are the result values behind the draft's sourced numbers.
+    `columns` are the numeric columns of the results it quotes, for totals and
+    shares of a total the draft need not list row by row.
+    """
+    totals = [(col, sum(vals)) for col, vals in columns if len(vals) > 1]
+    for col, total in totals:
+        yield f"total of {col}", total
+    for a, b in combinations(operands, 2):
+        yield "difference", a - b
+        yield "sum", a + b
+        for x, y in ((a, b), (b, a)):
+            if y != 0:
+                yield "ratio", x / y
+                yield "percent change", (x - y) / y
+    if len(operands) > 2:
+        yield "sum", sum(operands)
+    for col, total in totals:
+        if total != 0:
+            for a in operands:
+                yield f"share of {col}", a / total
+
+
 def review_answer(
     draft: str, session: Session, required_disclosures: list[str] | None = None
 ) -> AnswerReview:
-    checks: list[NumberCheck] = []
-    unsourced: list[NumberCheck] = []
+    with session.lock:
+        return _review(draft, session, required_disclosures)
+
+
+def _review(draft: str, session: Session, required_disclosures: list[str] | None) -> AnswerReview:
+    # Newest first, so a number two results share is traced to the later one
+    # and the draft owes that one's disclosures.
+    stored = list(reversed(list(session.results.values())))
     pool: list[tuple[str, str, float]] = [
-        (r.result_id, col, v) for r in session.results.values() for col, v in r.numeric_values
+        (r.result_id, col, v) for r in stored for col, v in r.numeric_values
     ]
     if not pool:
         return AnswerReview(status="no_results_in_session")
 
+    checks: list[NumberCheck] = []
+    operands: list[float] = []
+    cited: list[str] = []
     for literal, value in extract_numbers(draft):
         if _is_prose_number(literal, value):
             continue
-        hit = next(((rid, col) for rid, col, v in pool if _matches(value, v, literal)), None)
-        check = NumberCheck(
-            number=literal,
-            value=value,
-            sourced=hit is not None,
-            result_id=hit[0] if hit else None,
-            column=hit[1] if hit else None,
+        hit = next(((rid, col, v) for rid, col, v in pool if _matches(value, v, literal)), None)
+        checks.append(
+            NumberCheck(
+                number=literal,
+                value=value,
+                sourced=hit is not None,
+                result_id=hit[0] if hit else None,
+                column=hit[1] if hit else None,
+            )
         )
-        checks.append(check)
-        if hit is None:
-            unsourced.append(check)
+        if hit is not None:
+            if hit[0] not in cited:
+                cited.append(hit[0])
+            if hit[2] not in operands:
+                operands.append(hit[2])
 
-    owed = required_disclosures if required_disclosures is not None else session.disclosures
+    # Second pass: what no result holds may still be arithmetic over what the
+    # draft does source. The sign is dropped; "down 4.7%" and "-4.7%" both pass.
+    if any(not c.sourced for c in checks):
+        columns: list[tuple[str, list[float]]] = []
+        for rid in cited:
+            by_col: dict[str, list[float]] = {}
+            for col, v in session.results[rid].numeric_values:
+                by_col.setdefault(col, []).append(v)
+            columns.extend(by_col.items())
+        derived = [(how, abs(v)) for how, v in _derivations(operands[:_OPERANDS_KEPT], columns)]
+        for c in checks:
+            if c.sourced:
+                continue
+            how = next((h for h, v in derived if _matches(abs(c.value), v, c.number)), None)
+            if how is not None:
+                c.sourced = True
+                c.derived = how
+    unsourced = [c for c in checks if not c.sourced]
+
+    if required_disclosures is not None:
+        owed = list(required_disclosures)
+    else:
+        quoted = [session.results[rid] for rid in cited] or [r for r in stored if not r.reviewed]
+        owed = list(dict.fromkeys(d for r in quoted for d in r.disclosures))
     present = [d for d in owed if _disclosure_present(d, draft)]
     missing = [d for d in owed if d not in present]
-    status = "pass" if not unsourced else "unsourced_numbers"
+    if unsourced:
+        status = "unsourced_numbers"
+    elif missing:
+        status = "missing_disclosures"
+    else:
+        status = "pass"
+        for r in stored:
+            r.reviewed = True
     return AnswerReview(
         status=status,
         checked=checks,

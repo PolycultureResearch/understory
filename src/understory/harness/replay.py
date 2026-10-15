@@ -68,7 +68,7 @@ class Bypass(BaseModel):
     turn: int = 1
     """Which user turn the query came from, 1-based."""
     sent_question: str | None = None
-    """What the model put in `spec.question`. None when it sent nothing."""
+    """`spec.earlier` and `spec.question` as the model sent them, joined. None if neither."""
     metrics: list[str] = Field(default_factory=list)
     """The metrics the sent spec ran, after the traps check it did get."""
 
@@ -156,7 +156,7 @@ def _bypasses(
             trap=trap_id,
             effect=_effect(trap_id, sent, oracle, registry),
             turn=turn,
-            sent_question=spec.question,
+            sent_question=spec.said() or None,
             metrics=list(sent.spec.metrics),
         )
         for trap_id in oracle.fired
