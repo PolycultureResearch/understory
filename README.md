@@ -84,7 +84,7 @@ uv run understory eval --tenant tenants/alpenglow --set realistic --repeat 5 \
   --id sales_by_month_2025_q1 --id refunds_why_2024_10 --prompt lean
 ```
 
-Traps fire on the question text the chatbot sends, and across turns it often drops the word that matters. On alpenglow's multi-turn set, 42% of runs in BYO mode lost a swap or an ask. `checks.spec_disclosures` is a candidate fix, off by default: a spec that names a non-preferred candidate gets a disclosure whatever the question says. Four hundred runs did not show it improves outcomes, so it stays off; `knowledge/grill-2026-10-05.md` has the critique that led here, the numbers, and what to try next.
+Traps fire on the user's words as the chatbot copies them into the spec: `question`, which is required, and `earlier`, the previous messages a follow-up builds on. Before `earlier` existed, 42% of runs on alpenglow's multi-turn set in BYO mode lost a swap or an ask; with it, one run in fifty did on Sonnet (`knowledge/followup-question-2026-10-12.md`). `checks.spec_disclosures` is a candidate fix, off by default: a spec that names a non-preferred candidate gets a disclosure whatever the question says. Four hundred runs did not show it improves outcomes, so it stays off; `knowledge/grill-2026-10-05.md` has the critique that led here, the numbers, and what to try next.
 
 ```bash
 uv run understory eval --tenant tenants/alpenglow --set multiturn --byo                       # bypass rate, rule off

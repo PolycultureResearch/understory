@@ -109,13 +109,13 @@ How to work:
    that it is unverified.
 7. State every required_disclosure from the tool result in your answer, in your
    own words but without dropping what it says.
-8. Never state a number that did not come back in a tool result. No estimates,
-   no arithmetic on numbers you were not given beyond what the tools returned.
+8. Never state a number that did not come back in a tool result, except a
+   difference, sum, ratio or percent change of numbers that did, stated next to
+   them. No estimates.
 9. Call log_answer with your draft answer before you reply, every time,
    including when you conclude the question cannot be answered and never ran a
-   query. That is how refusals get recorded. If it reports unsourced numbers,
-   fix the draft so every number traces to a result, then reply with the
-   corrected text.
+   query. That is how refusals get recorded. If it reports unsourced numbers
+   or missing disclosures, fix the draft, then reply with the corrected text.
 10. log_answer is an internal check. Never mention it, its verdict, or any
    number it flagged in what you say to the user, and never argue with it or
    explain that you are rephrasing. Your reply is the corrected answer and
@@ -396,8 +396,12 @@ def build_agent(
           not_in, gt, gte, lt, lte.
         - time: {grain, start, end} with ISO dates. An omitted end anchors to
           the latest date with data, never to today.
-        - question: the user's question, verbatim. It feeds the traps check, so
-          always send it.
+        - question: the user's latest message, verbatim. Required. It feeds the
+          traps check.
+        - earlier: on a follow-up, the user's previous messages that the latest
+          one builds on, verbatim, oldest first. "Split that by country" needs
+          the message that said what "that" is, because the traps check reads
+          these too. Leave it empty for a first question or a new subject.
         - clarifications: [{trap, choice}] for every clarification the user has
           already answered.
 
@@ -445,9 +449,11 @@ def build_agent(
         """Send your draft answer before you show it to the user.
 
         Checks that every number in the draft traces back to a result this
-        session already saw, and that the required disclosures are present.
-        Returns pass, or the numbers with no source. Fix the draft and call
-        again if anything came back unsourced.
+        session already saw, or is a difference, sum, ratio or percent change of
+        numbers the draft states from those results, and that the disclosures of
+        the results it quotes are present. Returns pass, the numbers with no
+        source, or the disclosures left out. Fix the draft and call again if
+        anything came back.
 
         Args:
             draft: The exact text you are about to reply with.
@@ -489,6 +495,7 @@ def build_agent(
     )
 
     if enforce_check:
+        nudged: list[bool] = []
 
         @agent.output_validator
         def checked(ctx: RunContext[None], output: str) -> str:
@@ -496,7 +503,9 @@ def build_agent(
 
             A reply the model already ran through log_answer as its last draft
             passes straight through. Any other reply is checked here; one with
-            unsourced numbers goes back to the model with the review, once.
+            unsourced numbers goes back to the model with the review. One that
+            only left a disclosure out goes back once: presence is a fuzzy
+            word match, and a false miss must not cost the run its retries.
             """
             if tr.review is not None and tr.last_draft == output:
                 return output
@@ -509,6 +518,13 @@ def build_agent(
                 raise ModelRetry(
                     f"These numbers in your reply did not come from any tool result this "
                     f"session saw: {unsourced}. {review.how_to_read}"
+                )
+            if review.status == "missing_disclosures" and not nudged:
+                nudged.append(True)
+                missing = " | ".join(review.disclosures_missing)
+                raise ModelRetry(
+                    f"Your reply left out these required disclosures: {missing}. "
+                    f"{review.how_to_read}"
                 )
             return output
 

@@ -177,7 +177,8 @@ def test_the_tenant_switch_reaches_query_metrics(alpenglow_db, tmp_path, on):
     service = Service(cfg, telemetry=TelemetryWriter(log, cfg.name))
     try:
         response = service.query_metrics(
-            Session(key="t"), {"metrics": ["gross_revenue"], "time": Q1}
+            Session(key="t"),
+            {"metrics": ["gross_revenue"], "time": Q1, "question": "How did Q1 go?"},
         )
     finally:
         service.close()

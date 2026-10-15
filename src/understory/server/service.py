@@ -72,11 +72,23 @@ HOW_TO_READ_REFUSAL = (
     "Tell the user plainly that this cannot be answered from the governed data and why. "
     "Offer the suggestions if any. Do not guess a number."
 )
+QUESTION_REQUIRED = (
+    "spec.question is missing. Send the user's latest message there in their own words, "
+    "and on a follow-up put the earlier messages it builds on in spec.earlier."
+)
+HOW_TO_READ_RESEND = "Call query_metrics again with the same spec and the missing field."
 HOW_TO_READ_REVIEW_PASS = "Your next message is this draft, addressed to the user."
 HOW_TO_READ_REVIEW_FIX = (
-    "Rewrite the draft so every number in it comes from a result this session saw, then "
-    "send the rewritten answer to the user as your next message. The user sees only that "
-    "message; this check and the numbers it listed stay between us."
+    "Rewrite the draft so every number in it comes from a result this session saw, or is "
+    "a difference, sum, ratio or percent change of numbers the draft states from those "
+    "results. "
+)
+HOW_TO_READ_REVIEW_DISCLOSE = (
+    "Add what each entry in disclosures_missing says to the draft, in your own words. "
+)
+HOW_TO_READ_REVIEW_SEND = (
+    "Then send the rewritten answer to the user as your next message. The user sees only "
+    "that message; this check and what it listed stay between us."
 )
 
 
@@ -192,6 +204,17 @@ class Service:
             except Exception as e:
                 return self._refuse(session, t0, "invalid", f"Bad spec: {e}", spec=None)
 
+        if not (spec.question or "").strip():
+            # Not a gap: nothing in dbt would close it. The traps check has
+            # nothing to read without the user's words, so nothing runs.
+            self._emit(session, Refused, event_id=uuid.uuid4().hex, reason="invalid", phrase=None)
+            self._tool(session, "query_metrics", "invalid", t0)
+            return ToolResponse(
+                status=Status.invalid,
+                refusal=Refusal(reason="invalid", message=QUESTION_REQUIRED),
+                how_to_read=HOW_TO_READ_RESEND,
+            )
+
         # 1. Validate against the catalog.
         problem = self._validate(spec)
         if problem is not None:
@@ -287,8 +310,7 @@ class Service:
             )
 
         # 5. Remember, log, return.
-        result_id = session.remember("query_metrics", result, spec.metrics)
-        session.owe(disclosures)
+        result_id = session.remember("query_metrics", result, spec.metrics, disclosures)
         event_id = uuid.uuid4().hex
         self._emit(
             session,
@@ -371,12 +393,11 @@ class Service:
                 refusal=Refusal(reason="sql_rejected", message=str(e)),
                 how_to_read=HOW_TO_READ_REFUSAL,
             )
-        result_id = session.remember("run_sql", result)
         disclosure = (
             f"This answer came from ad hoc SQL because {reason}. It is not a governed "
             "metric and is unverified."
         )
-        session.owe([disclosure])
+        result_id = session.remember("run_sql", result, disclosures=[disclosure])
         sql_hash = hashlib.sha256(g.sql.encode()).hexdigest()[:16]
         event_id = uuid.uuid4().hex
         self._gap(
@@ -422,9 +443,7 @@ class Service:
     def log_answer(self, session: Session, draft: str) -> AnswerReview:
         t0 = time.monotonic()
         review = review_answer(draft, session)
-        review.how_to_read = (
-            HOW_TO_READ_REVIEW_PASS if review.status == "pass" else HOW_TO_READ_REVIEW_FIX
-        )
+        review.how_to_read = _how_to_read_review(review)
         event_id = uuid.uuid4().hex
         self._emit(
             session,
@@ -666,6 +685,15 @@ class Service:
             )
         except Exception as e:
             log.warning("telemetry text failed: %s", e)
+
+
+def _how_to_read_review(review: AnswerReview) -> str:
+    fixes = ""
+    if review.unsourced:
+        fixes += HOW_TO_READ_REVIEW_FIX
+    if review.disclosures_missing:
+        fixes += HOW_TO_READ_REVIEW_DISCLOSE
+    return fixes + HOW_TO_READ_REVIEW_SEND if fixes else HOW_TO_READ_REVIEW_PASS
 
 
 def _ms(t0: float) -> int:

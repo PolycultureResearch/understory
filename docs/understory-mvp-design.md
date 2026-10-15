@@ -82,7 +82,7 @@ Seven tools. Each returns structured JSON with a `provenance` block and, where r
 | `search_dimension_values` | Resolve "the West" to real values | Matching values for a dimension, with counts |
 | `query_metrics` | Execute a metric spec | Rows, compiled SQL hash, applied conventions, disclosures. Or `needs_clarification`, `unanswerable`, `invalid` |
 | `run_sql` | Escape hatch, with the reason it was needed | Rows with `governed: false`, the SQL that ran, and a disclosure naming the reason |
-| `log_answer` | Capture the draft answer, check numbers | `pass` or a list of numbers with no source |
+| `log_answer` | Capture the draft answer, check numbers and disclosures | `pass`, the numbers with no source, or the disclosures left out |
 
 ### 4.1 `get_context`
 
@@ -102,15 +102,18 @@ Input is a spec, not a question. The chatbot does the parsing.
   "group_by": ["order__category"],
   "where": [{"dimension": "order__country", "op": "in", "values": ["US", "CA"]}],
   "time": {"grain": "month", "start": "2026-03-01", "end": "2026-08-31"},
-  "question": "net revenue by category in North America over the last six months",
+  "question": "and split that by category",
+  "earlier": ["net revenue in North America over the last six months"],
   "clarifications": [{"trap": "revenue", "choice": "net_revenue"}]
 }
 ```
 
+`question` is required: the user's latest message in their own words. A spec without it is refused before anything runs, because the traps check would have nothing to read. `earlier` is optional: the user's previous messages the latest one builds on, oldest first. The server never sees the conversation, only what the chatbot copies into these two fields, so a follow-up that says "split that by country" carries no trap word unless the message that named "that" comes with it.
+
 The server runs the following in order.
 
 1. Validate the spec against the catalog. Unknown metric or dimension returns `invalid` with the nearest matches, and writes a gap record naming what was missing and what was suggested.
-2. Run the traps check (section 5) against both the spec and the question text. A `prefer` trap applies its candidate and adds a disclosure. An `ask` trap that is not satisfied by a `clarifications` entry returns `needs_clarification` with options. An `unanswerable` match returns that status with the declared reason and writes a gap record.
+2. Run the traps check (section 5) against both the spec and the user's words: `earlier` and `question`, read as one text. A `prefer` trap applies its candidate and adds a disclosure. An `ask` trap that is not satisfied by a `clarifications` entry returns `needs_clarification` with options. An `unanswerable` match returns that status with the declared reason and writes a gap record.
 3. Resolve time. `end` defaults to the metric's latest available date, never today. A missing window takes the tenant's default window. Both are disclosed, and the disclosure names how to ask for a different window.
 4. Check volume. For each time dimension the metrics read, a period inside the window whose row count fell far below the same period in the weeks around it is disclosed as a possibly incomplete load, with the period and the shortfall. The number is not changed. A single low day on a daily feed is indistinguishable from a holiday, so daily dropouts are only reported as runs of two or more days; a weekly feed reports one low week. Off per tenant with `checks.volume: false`. The rule and its thresholds are in `server/volume.py`.
 5. Compile through the semantic layer, execute through the warehouse adapter, cap rows.
@@ -133,7 +136,11 @@ The semantic layer will be young at every new client. SQL will carry a lot of ea
 
 ### 4.4 `log_answer`
 
-The chatbot sends its draft answer before showing it. The server extracts numbers from the draft and checks each against the results returned earlier in the conversation, with rounding tolerance. It returns `pass` or the list of numbers with no source. It also captures the draft for the log, including drafts that refuse without ever having run a query, so prose refusals are recorded.
+The chatbot sends its draft answer before showing it. The server extracts numbers from the draft and checks each against the results returned earlier in the conversation, with rounding tolerance. A number no result holds still passes when it is arithmetic over numbers the draft does source: a difference, sum, ratio or percent change of two of them, a column total, or a share of one. The operands have to be in the draft, so "down 4.7%" passes next to the two months it compares and fails alone.
+
+The draft owes the disclosures of the results it quotes, and only those; a draft that quotes no number owes the disclosures of results no passing draft has covered. The server cannot see where one question ends and the next begins, and this scoping does not need it to.
+
+It returns `pass`, `unsourced_numbers` with the numbers, or `missing_disclosures` with the sentences left out. It also captures the draft for the log, including drafts that refuse without ever having run a query, so prose refusals are recorded.
 
 This tool is advisory in a BYO chatbot. Nothing forces the model to call it. We measure the call rate per tenant as an eval metric and accept that capture is partial. The harness always calls it. There is no LLM critic in the MVP; it is roadmap 1.5.
 
@@ -300,6 +307,8 @@ Two service accounts per tenant. The query identity reads marts and cannot touch
 
 ### 8.4 Conversations and sessions
 
+The tools are synchronous code behind an async server. Each call runs on a worker thread (a pool of 16), so a query waiting out the warehouse timeout does not stall the tenant's other users.
+
 The server keeps a small in-memory conversation per MCP connection so `log_answer` can check numbers against earlier results. Conversations expire after inactivity and nothing in them is persisted beyond the events already logged. Sessions, for analysis, are reconstructed in dbt from timestamps and `user_hash`.
 
 ## 9. The harness
@@ -315,7 +324,7 @@ The harness has four jobs.
 - Serve demos and the sales deck without a client chatbot account.
 - Be the agent the Slack transport wraps.
 
-The harness enforces the closing step in code, not in the prompt: an output validator runs the final reply through `log_answer` when the model did not, and hands an unsourced review back for one more turn. The first live run (`knowledge/step4-close-2026-09-21.md`) is why: asked in the prompt, Sonnet skipped the check on the two long answers and narrated it on a third, while the one-line connector instruction got it every time. The prompt is otherwise a variable under test (`eval --prompt`): `harness` is the original ten rules, `lean` is the connector instructions plus the two lines with evidence behind them. So the harness is not a ceiling and BYO not a floor; they are two prompt surfaces over the same tools, measured against each other, and we report both when we have both. The Slack transport inherits whichever wins.
+The harness enforces the closing step in code, not in the prompt: an output validator runs the final reply through `log_answer` when the model did not, and hands an unsourced review back for one more turn. A reply that only left a disclosure out goes back once. The first live run (`knowledge/step4-close-2026-09-21.md`) is why: asked in the prompt, Sonnet skipped the check on the two long answers and narrated it on a third, while the one-line connector instruction got it every time. The prompt is otherwise a variable under test (`eval --prompt`): `harness` is the original ten rules, `lean` is the connector instructions plus the two lines with evidence behind them. So the harness is not a ceiling and BYO not a floor; they are two prompt surfaces over the same tools, measured against each other, and we report both when we have both. The Slack transport inherits whichever wins.
 
 ## 10. Evaluation
 

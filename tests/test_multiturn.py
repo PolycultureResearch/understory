@@ -168,7 +168,9 @@ def test_run_evals_runs_earlier_turns_and_replays_against_what_was_said(alpenglo
     assert script.prompts[0] == [item.earlier[0]]
     assert script.prompts[-1] == [item.earlier[0], item.question]
     assert (score.turns, score.queries) == (2, 2)
-    assert score.usage.get("requests") == 4
+    # Two requests a turn, and one more each for the structural check handing
+    # back a scripted reply that left the disclosures out.
+    assert score.usage.get("requests") == 6
 
     # The first turn sent the user's words, so only the second is a bypass.
     [bypass] = score.bypasses

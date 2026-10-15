@@ -86,10 +86,78 @@ def test_governed_query_resolves(service, session):
 
     # The number check accepts a number from that result and rejects a made-up one.
     value = next(v for row in r.result.rows for v in row if isinstance(v, int | float))
-    ok = service.log_answer(session, f"Net revenue was {value:,.2f} in the first month.")
+    draft = f"Net revenue was {value:,.2f} in the first month."
+    bare = service.log_answer(session, draft)
+    assert bare.status == "missing_disclosures", bare
+    assert bare.disclosures_missing == r.required_disclosures
+    assert "disclosures_missing" in bare.how_to_read
+    ok = service.log_answer(session, draft + " " + " ".join(r.required_disclosures))
     assert ok.status == "pass", ok
     bad = service.log_answer(session, "Net revenue was 123,456,789.")
     assert bad.status == "unsourced_numbers"
+    assert "percent change" in bad.how_to_read
+
+
+def test_a_spec_without_the_question_is_refused_and_is_not_a_gap(service, session):
+    before = service.telemetry.pending
+    for spec in ({"metrics": ["net_revenue"]}, {"metrics": ["net_revenue"], "question": "  "}):
+        r = service.query_metrics(session, spec)
+        assert r.status == Status.invalid, r
+        assert "spec.question" in r.refusal.message
+        assert r.result is None
+    assert service.telemetry.pending[2] == before[2], "no gap record"
+
+
+def test_a_trap_word_in_an_earlier_turn_still_fires(service, session):
+    """The follow-up from the grill: the question alone carries no trap word."""
+    spec = {
+        "metrics": ["gross_revenue"],
+        "group_by": ["order__country"],
+        "time": {"start": "2025-01-01", "end": "2025-03-31"},
+        "question": "Split that by country.",
+    }
+    alone = service.query_metrics(session, spec)
+    assert alone.provenance.metrics == ["gross_revenue"]
+
+    heard = service.query_metrics(
+        session, {**spec, "earlier": ["What was revenue in the first quarter of 2025?"]}
+    )
+    assert heard.provenance.metrics == ["net_revenue"]
+    assert any("net revenue" in d.lower() for d in heard.required_disclosures)
+
+    named = service.query_metrics(
+        session,
+        {
+            **spec,
+            "question": "Now show gross revenue by country.",
+            "earlier": ["What was revenue in the first quarter of 2025?"],
+        },
+    )
+    assert named.provenance.metrics == ["gross_revenue"], "the user asked for it by name"
+
+
+def test_a_draft_owes_only_the_disclosures_of_the_results_it_quotes(service, session):
+    asked = service.run_sql(
+        session,
+        "select count(*) as n from main_marts.fct_orders where country = 'US'",
+        question="How many US orders?",
+        reason="checking the scope of the check",
+    )
+    governed = service.query_metrics(
+        session,
+        {
+            "metrics": ["orders"],
+            "time": {"start": "2025-02-01", "end": "2025-02-28"},
+            "question": "How many orders in February 2025?",
+        },
+    )
+    value = governed.result.rows[0][-1]
+    review = service.log_answer(
+        session, f"There were {value:,} orders. " + " ".join(governed.required_disclosures)
+    )
+    assert review.status == "pass", review
+    assert not any("ad hoc SQL" in d for d in review.disclosures_present)
+    assert asked.required_disclosures[0] not in review.disclosures_missing
 
 
 def test_end_anchors_to_data(service, session):
@@ -98,6 +166,7 @@ def test_end_anchors_to_data(service, session):
         {
             "metrics": ["orders"],
             "time": {"grain": "month", "start": "2025-06-01", "end": "2099-01-01"},
+            "question": "Orders by month since June 2025",
         },
     )
     assert r.status == Status.resolved, r
@@ -105,9 +174,12 @@ def test_end_anchors_to_data(service, session):
 
 
 def test_invalid_metric_and_dimension(service, session):
-    r = service.query_metrics(session, {"metrics": ["revenu"]})
+    r = service.query_metrics(session, {"metrics": ["revenu"], "question": "revenu"})
     assert r.status == Status.invalid and "net_revenue" in r.refusal.suggestions
-    r = service.query_metrics(session, {"metrics": ["orders"], "group_by": ["order__promo_code"]})
+    r = service.query_metrics(
+        session,
+        {"metrics": ["orders"], "group_by": ["order__promo_code"], "question": "by promo code"},
+    )
     assert r.status == Status.invalid and r.refusal.suggestions
 
 

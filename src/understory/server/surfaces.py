@@ -31,9 +31,13 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "query_metrics": (
         "Run a governed metric query. Send a spec: metrics (names from list_metrics), "
         "group_by (entity__dimension names, or metric_time), where clauses, time "
-        "{grain, start, end}, the user's question, and any clarifications "
-        "[{trap, choice}] answered earlier. Returns rows with provenance, or "
-        "needs_clarification with options to show the user, or a refusal."
+        "{grain, start, end}, and any clarifications [{trap, choice}] answered earlier. "
+        "Always send question: the user's latest message in their own words. On a "
+        "follow-up, also send earlier: the user's previous messages it builds on, in "
+        "their words, so 'split that by country' arrives with the message that said "
+        "what 'that' is. The server reads both for terms this company has flagged as "
+        "ambiguous. Returns rows with provenance, or needs_clarification with options "
+        "to show the user, or a refusal."
     ),
     "run_sql": (
         "Escape hatch: run one read-only SELECT against the allowed schemas when no "
@@ -43,7 +47,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "log_answer": (
         "Send your draft answer before replying. Checks that every number traces to a "
-        "result from this session and that required disclosures are present."
+        "result from this session, or is a difference, sum, ratio or percent change of "
+        "numbers the draft states from those results, and that the disclosures of the "
+        "results it quotes are present."
     ),
 }
 """What each tool says about itself to a connector. Keyed by tool name."""
