@@ -56,7 +56,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from pydantic_ai.models import Model
 
-from understory.harness.agent import DEFAULT_MODEL, Turn, model_id, run_question
+from understory.harness.agent import DEFAULT_MODEL, Turn, model_id, provider_for, run_question
 from understory.harness.golden import GoldenItem
 from understory.harness.replay import Bypass, SentQuery, replay_conversation
 from understory.server.service import Service
@@ -548,15 +548,23 @@ def check_budget(
     per_item: float = BUDGET_PER_ITEM,
     force: bool = False,
     echo: Callable[[str], None] | None = None,
+    provider: str = "openrouter",
 ) -> dict[str, Any]:
     """Read the key's balance, report it, and refuse a run it cannot cover.
 
     Raises `BudgetError` when `limit_remaining` is below `items * per_item`. A
     key with no spend limit reports `limit_remaining: null`, which is unlimited
     credit and always passes, as does a balance we could not read at all.
+
+    Anthropic has no endpoint for a key's balance, so a run sent there only
+    reports the estimate. Its Console shows the credit.
     """
-    status = key_status(api_key)
     estimate = items * per_item
+    if provider == "anthropic":
+        if echo is not None:
+            echo(f"anthropic key: balance unknown | {items} items needs about ${estimate:.2f}")
+        return {}
+    status = key_status(api_key)
     if echo is not None:
         if status:
             echo(
@@ -624,7 +632,14 @@ def run_evals(
     if isinstance(model, str):
         # A multi-turn item costs about one item per user turn.
         turns = sum(1 + len(item.earlier) for item, _ in runs)
-        check_budget(turns, api_key=api_key, per_item=budget_per_item, force=force, echo=echo)
+        check_budget(
+            turns,
+            api_key=api_key,
+            per_item=budget_per_item,
+            force=force,
+            echo=echo,
+            provider=provider_for(model) or "openrouter",
+        )
 
     started = datetime.now(UTC)
     name = model_id(model)
@@ -689,11 +704,19 @@ def _skipped_score(item: GoldenItem) -> ItemScore:
 
 
 def _out_of_credits(score: ItemScore) -> bool:
-    """Did the provider refuse this item for money rather than for content?"""
+    """Did the provider refuse this item for money rather than for content?
+
+    OpenRouter says 402. Anthropic says 400 with "Your credit balance is too
+    low to access the Anthropic API".
+    """
     if score.error_status == 402:
         return True
     text = (score.error or "").lower()
-    return "insufficient credit" in text or ("402" in text and "credit" in text)
+    return (
+        "insufficient credit" in text
+        or "credit balance is too low" in text
+        or ("402" in text and "credit" in text)
+    )
 
 
 def _progress(score: ItemScore, spent: float) -> str:

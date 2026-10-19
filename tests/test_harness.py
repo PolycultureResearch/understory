@@ -31,10 +31,18 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RequestUsage, RunUsage
 
 from understory.harness import evals
-from understory.harness.agent import DEFAULT_MODEL, Turn, _usage, run_question
+from understory.harness.agent import (
+    DEFAULT_MODEL,
+    Turn,
+    _usage,
+    anthropic_id,
+    provider_for,
+    resolve_model,
+    run_question,
+)
 from understory.harness.deterministic import run_deterministic
 from understory.harness.evals import (
     EvalReport,
@@ -408,6 +416,46 @@ def test_usage_falls_back_to_the_price_estimate():
     assert _usage(_FakeResult(priced))["cost"] == pytest.approx(0.0042)
 
 
+def test_usage_prices_an_anthropic_response_from_its_tokens():
+    """Anthropic reports no cost, so each response is priced from its own usage."""
+    response = ModelResponse(
+        parts=[],
+        usage=RequestUsage(input_tokens=200_000, output_tokens=1_000),
+        model_name="claude-sonnet-5",
+        provider_name="anthropic",
+    )
+    expected = float(response.cost().total_price)
+    assert expected > 0
+    assert _usage(_FakeResult(_run_usage(), [response]))["cost"] == pytest.approx(expected)
+
+
+def test_anthropic_ids_drop_the_prefix_and_the_dots():
+    assert anthropic_id("anthropic/claude-sonnet-5") == "claude-sonnet-5"
+    assert anthropic_id("anthropic/claude-haiku-4.5") == "claude-haiku-4-5"
+    assert anthropic_id("deepseek/deepseek-v4-pro") is None
+
+
+def test_an_anthropic_key_sends_anthropic_models_straight_there(monkeypatch):
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.models.openrouter import OpenRouterModel
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    model = resolve_model("anthropic/claude-haiku-4.5")
+    assert isinstance(model, AnthropicModel)
+    assert model.model_name == "claude-haiku-4-5"
+    assert model.settings["anthropic_cache_messages"] == "5m"
+    assert provider_for("anthropic/claude-haiku-4.5") == "anthropic"
+
+    other = resolve_model("deepseek/deepseek-v4-pro")
+    assert isinstance(other, OpenRouterModel), "a non-Anthropic model still goes to OpenRouter"
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    assert isinstance(resolve_model("anthropic/claude-haiku-4.5"), OpenRouterModel)
+    assert provider_for("anthropic/claude-haiku-4.5") == "openrouter"
+    assert provider_for(FunctionModel(lambda m, i: ModelResponse(parts=[]))) is None
+
+
 def test_usage_survives_a_callable_usage():
     """`usage` was a method before pydantic-ai 2.x. Reading it as one must still work."""
 
@@ -525,6 +573,28 @@ def test_check_budget_allows_an_unlimited_or_unreadable_key(monkeypatch):
     assert "balance unknown" in lines[0]
 
 
+def test_check_budget_on_anthropic_reports_the_estimate_only(monkeypatch):
+    def unreachable(*a, **k):
+        raise AssertionError("asked OpenRouter about an Anthropic run")
+
+    monkeypatch.setattr(evals, "key_status", unreachable)
+    lines: list[str] = []
+    assert evals.check_budget(10, per_item=0.06, echo=lines.append, provider="anthropic") == {}
+    assert lines == ["anthropic key: balance unknown | 10 items needs about $0.60"]
+
+
+def test_anthropic_out_of_credit_stops_the_run():
+    score = ItemScore(
+        id="a",
+        question="?",
+        passed=False,
+        error="status_code: 400, body: {'error': {'message': 'Your credit balance is too "
+        "low to access the Anthropic API.'}}",
+        error_status=400,
+    )
+    assert evals._out_of_credits(score)
+
+
 def test_key_status_without_a_key_is_empty(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert evals.key_status() == {}
@@ -579,8 +649,8 @@ def test_run_evals_stops_on_insufficient_credits(alpenglow_db):
 @pytest.mark.metricflow
 @pytest.mark.slow
 def test_live_openrouter(alpenglow_db):
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        pytest.skip("OPENROUTER_API_KEY not set")
+    if not (os.environ.get("OPENROUTER_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
+        pytest.skip("neither OPENROUTER_API_KEY nor ANTHROPIC_API_KEY is set")
     items = load_golden(alpenglow_db.golden_path)
     wanted = ("net_revenue_by_month_q1_2025", "margin_collision_q2_2025")
     chosen = [i for i in items if i.id in wanted]

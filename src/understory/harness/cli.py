@@ -43,7 +43,12 @@ harness_help = "Harness: ask one question or run a tenant's golden set."
 def ask(
     question: str = typer.Argument(..., help="The question to ask."),
     tenant: Path = tenant_option(),
-    model: str = typer.Option(None, "--model", "-m", help="OpenRouter model id."),
+    model: str = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="OpenRouter model id; anthropic/... direct with ANTHROPIC_API_KEY.",
+    ),
     answer: list[str] = typer.Option(
         None,
         "--answer",
@@ -94,7 +99,10 @@ def ask(
 def eval_command(
     tenant: Path = tenant_option(),
     model: list[str] = typer.Option(
-        None, "--model", "-m", help="OpenRouter model id. Repeat to score several."
+        None,
+        "--model",
+        "-m",
+        help="OpenRouter model id; anthropic/... direct with ANTHROPIC_API_KEY. Repeatable.",
     ),
     tiers: bool = typer.Option(
         False, "--tiers", help="Score on the default model and the cheap one, then compare."

@@ -13,7 +13,7 @@ dependencies = [
     "duckdb>=1.1.0",
     "pyarrow>=15.0.0",
     "sqlglot>=25.0.0",
-    "pydantic-ai-slim[openai]>=1.0",
+    "pydantic-ai-slim[openai,anthropic]>=1.0",
     "typer>=0.12.0",
 ]
 

@@ -40,7 +40,7 @@ Boring tools. Python, DuckDB, Parquet, dbt, MetricFlow. Nothing that needs a pla
 ## 3. System overview
 
 ```
-  ChatGPT Enterprise / Claude.ai            Understory harness (Python, OpenRouter)
+  ChatGPT Enterprise / Claude.ai            Understory harness (Python, Anthropic/OpenRouter)
            │  MCP over HTTPS                        │  same tools, in-process
            ▼                                        ▼
  ┌────────────────────── Understory server (one container per tenant) ──────────────────────┐
@@ -304,7 +304,7 @@ The server keeps a small in-memory conversation per MCP connection so `log_answe
 
 ## 9. The harness
 
-A Python agent that talks to the same tools in-process, with the LLM behind OpenRouter through Pydantic AI. The model is a tenant setting and evals pin it. The default is a mid-tier model chosen for cost per eval run, so that a model that does well on our evals is a floor for the client's chatbot rather than a ceiling.
+A Python agent that talks to the same tools in-process, with the LLM behind Pydantic AI: Anthropic's API for Claude models when an Anthropic key is set, OpenRouter for everything else. The model is a tenant setting and evals pin it. The default is a mid-tier model chosen for cost per eval run, so that a model that does well on our evals is a floor for the client's chatbot rather than a ceiling.
 
 The harness is the reference chatbot, and it has to be cheap because it becomes the Slack transport. Prompt caching of the fixed prefix, message history across the clarification turn, per-question usage and cost capture, and budget guards landed with PR #2. What remains, payload trimming and a cheaper routine eval model, is roadmap 1.7.
 

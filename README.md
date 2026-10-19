@@ -48,7 +48,7 @@ src/understory/
   warehouse/   Warehouse: duckdb, bigquery
   guard/       sqlglot read-only SQL guard for run_sql
   telemetry/   write-only Parquet log in three families (events, text, gaps), HMAC user hashing
-  harness/     Pydantic AI agent over OpenRouter, trap, realistic and multi-turn sets, eval runner, oracle replay, golden and realistic drafting
+  harness/     Pydantic AI agent over Anthropic or OpenRouter, trap, realistic and multi-turn sets, eval runner, oracle replay, golden and realistic drafting
 dbt_understory/  dbt package modeling the log: fct_questions, fct_sessions, mart_eval_daily, ...
 tenants/         one directory per client; four fake_companies tenants committed
 ```
@@ -59,7 +59,7 @@ Every command takes `--tenant` as a directory, a `tenant.yml`, or a fixture name
 
 ## Stack
 
-Python 3.13, the official MCP SDK, open-source MetricFlow, DuckDB and BigQuery, Parquet, dbt, sqlglot, Pydantic AI over OpenRouter.
+Python 3.13, the official MCP SDK, open-source MetricFlow, DuckDB and BigQuery, Parquet, dbt, sqlglot, Pydantic AI over Anthropic or OpenRouter.
 
 ## Status
 
@@ -68,7 +68,8 @@ Steps 1 through 7 of the build sequence (design section 14) are built. That cove
 Next are the first friendly users on a fake tenant, through Claude.ai over a tunnel. Nothing has run against a real client warehouse yet, and connector auth against an identity provider isn't built.
 
 ```bash
-export OPENROUTER_API_KEY=...
+export ANTHROPIC_API_KEY=...   # anthropic/... models go straight to Anthropic
+export OPENROUTER_API_KEY=...   # every other model, or Anthropic's without the key above
 uv run understory ask --tenant tenants/alpenglow "How were sales in the US in March 2025?"
 uv run understory eval --tenant tenants/alpenglow --deterministic     # trap set, no LLM
 uv run understory eval --tenant tenants/alpenglow                     # live, writes tenants/alpenglow/.evals/
