@@ -2,8 +2,9 @@
 
 The harness is the reference chatbot. It talks to the same seven methods the
 MCP server exposes, in process, so an eval run and a real connector exercise
-the same code. The model sits behind OpenRouter, which keeps the eval bill
-predictable and lets us pin a model id per run.
+the same code. Model ids are OpenRouter ids, pinned per run. An `anthropic/...`
+id goes straight to Anthropic when `ANTHROPIC_API_KEY` is set (see
+`provider_for`), and everything else goes through OpenRouter.
 
 Two things make the harness stricter than a bring-your-own chatbot. It always
 calls `get_context` first, and it always calls `log_answer` with its draft
@@ -27,15 +28,15 @@ connector has no such hook. `PROMPTS` holds the system prompts under test:
 the two lines with evidence behind them.
 
 Tests drive the same agent with `pydantic_ai.models.test.TestModel` or
-`FunctionModel`, which is why `model` accepts a `Model` instance as well as an
-OpenRouter model id.
+`FunctionModel`, which is why `model` accepts a `Model` instance as well as a
+model id.
 
 Most of an eval's bill is input tokens, because every request in a run re-sends
 the system prompt, the seven tool schemas and whatever get_context returned. The
-fix is prompt caching: `resolve_model` builds a `pydantic_ai.models.openrouter`
-model with cache breakpoints on the instructions, on the tool definitions and on
-the last message of each request. OpenRouter turns those into Anthropic
-`cache_control` blocks, and the profile flags make them a no-op on a model whose
+fix is prompt caching: `resolve_model` builds a model with cache breakpoints
+on the instructions, on the tool definitions and on the last message of each
+request. They become Anthropic `cache_control` blocks, directly or through
+OpenRouter, and the profile flags make them a no-op on a model whose
 downstream provider has no explicit cache control.
 """
 
@@ -250,10 +251,40 @@ class Trace:
 # --------------------------------------------------------------------------- #
 
 
+def anthropic_id(model: str) -> str | None:
+    """Anthropic's own name for an OpenRouter `anthropic/...` id, else None.
+
+    OpenRouter writes versions with dots, Anthropic with dashes:
+    `anthropic/claude-haiku-4.5` is `claude-haiku-4-5`.
+    """
+    if not model.startswith("anthropic/"):
+        return None
+    return model.removeprefix("anthropic/").replace(".", "-")
+
+
+def provider_for(model: str | Model) -> Literal["anthropic", "openrouter"] | None:
+    """Which API a model id will be sent to. None for a `Model` instance.
+
+    An `anthropic/...` id goes straight to Anthropic when `ANTHROPIC_API_KEY`
+    is set, so the run draws on that account's credit. Everything else, and an
+    Anthropic id with no Anthropic key, goes to OpenRouter.
+    """
+    if not isinstance(model, str):
+        return None
+    if anthropic_id(model) and os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    return "openrouter"
+
+
 def resolve_model(model: str | Model, api_key: str | None = None) -> Model:
-    """Turn a model id into an OpenRouter-backed model. A `Model` passes through.
+    """Turn a model id into a model on Anthropic or OpenRouter. A `Model` passes through.
 
     Passing a `Model` is how the tests run the whole agent with no API key.
+    `provider_for` picks the API, and `api_key` is a key for that API.
+
+    Straight to Anthropic, the same three breakpoints are `anthropic_cache_*`
+    settings and cost is estimated from the token counts (see `_cost`). The rest
+    of this docstring is the OpenRouter path.
 
     The settings do two things beyond naming the model. They ask OpenRouter for
     usage accounting, which is the only way the per-request cost in USD comes
@@ -274,6 +305,21 @@ def resolve_model(model: str | Model, api_key: str | None = None) -> Model:
     """
     if isinstance(model, Model):
         return model
+    if provider_for(model) == "anthropic":
+        from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+
+        key = api_key or os.environ["ANTHROPIC_API_KEY"]
+        anthropic_settings = AnthropicModelSettings(
+            anthropic_cache_instructions=CACHE_TTL,
+            anthropic_cache_tool_definitions=CACHE_TTL,
+            anthropic_cache_messages=CACHE_TTL,
+        )
+        return AnthropicModel(
+            anthropic_id(model),
+            provider=AnthropicProvider(api_key=key),
+            settings=anthropic_settings,
+        )
     from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
     from pydantic_ai.providers.openrouter import OpenRouterProvider
 
@@ -642,7 +688,11 @@ def _usage(result: Any) -> dict[str, float]:
 
 
 def _cost(result: Any, usage: Any) -> float | None:
-    """USD this run cost, OpenRouter's own number first, the estimate second."""
+    """USD this run cost, OpenRouter's own number first, the estimate second.
+
+    Anthropic reports no cost, so a response from it is priced by
+    `ModelResponse.cost()`, the genai-prices table, from its own token counts.
+    """
     reported = 0.0
     try:
         responses = result.new_messages()
@@ -651,6 +701,11 @@ def _cost(result: Any, usage: Any) -> float | None:
     for message in responses:
         details = getattr(message, "provider_details", None) or {}
         value = details.get("cost") if isinstance(details, dict) else None
+        if not isinstance(value, int | float | Decimal) and hasattr(message, "cost"):
+            try:
+                value = message.cost().total_price
+            except Exception:
+                value = None
         if isinstance(value, int | float | Decimal):
             reported += float(value)
     if reported:
@@ -713,8 +768,10 @@ __all__ = [
     "ToolCallRecord",
     "Trace",
     "Turn",
+    "anthropic_id",
     "build_agent",
     "model_id",
+    "provider_for",
     "resolve_model",
     "run_question",
 ]
